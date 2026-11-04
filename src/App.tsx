@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isPermissionGranted, requestPermission, sendNotification } from "@tauri-apps/plugin-notification";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { MousePointerClick, TriangleAlert, X } from "lucide-react";
-import type { Job, Settings, Status, Track, View, Commute } from "./types";
+import type { AiRank, Job, Settings, Status, Track, View, Commute } from "./types";
 import { api, canLoadDescription } from "./lib/api";
 import { analyze, germanNeed, germanOk, type Analysis, type GermanNeed } from "./lib/match";
 import { ago } from "./lib/format";
@@ -12,6 +12,7 @@ import { isFollowUpDue, snoozeUntil } from "./lib/followup";
 import { formatWhen } from "./lib/ics";
 import { hiddenBy } from "./lib/rules";
 import { weeklyStats } from "./lib/weekly";
+import { learnSignals, scoreJob, type Fit } from "./lib/foryou";
 import type { SavedView } from "./types";
 import { TitleBar } from "./components/TitleBar";
 import { Sidebar } from "./components/Sidebar";
@@ -22,6 +23,9 @@ import { InsightsView } from "./components/InsightsView";
 import { SettingsView } from "./components/SettingsView";
 import { Kbd, Modal, ToastProvider, useToast } from "./components/ui";
 import { ErrorBoundary } from "./components/ErrorBoundary";
+import { Setup } from "./components/Setup";
+import { AssistantView, type ChatLine } from "./components/AssistantView";
+import { ApplyModal, GptRankModal } from "./components/ApplyModals";
 
 export default function App() {
   return (
@@ -32,6 +36,9 @@ export default function App() {
 }
 
 const TRACKED = new Set(["applied", "interview", "offer", "rejected"]);
+/** Below this a job isn't a real match, just the baseline with no signal. */
+const FOR_YOU_MIN = 30;
+const FOR_YOU_MAX = 150;
 
 function Shell() {
   const toast = useToast();
@@ -45,7 +52,7 @@ function Shell() {
       return next;
     });
   const [descriptions, setDescriptions] = useState<Record<string, string>>({});
-  const [view, setView] = usePersisted<View>("view", "jobs", ["jobs", "pipeline", "insights", "settings"]);
+  const [view, setView] = usePersisted<View>("view", "jobs", ["jobs", "assistant", "pipeline", "insights", "settings"]);
   const [selectedId, setSelectedId] = useState<string | null>(() => {
     try {
       return localStorage.getItem("bolzano-jobs.selected");
@@ -61,12 +68,17 @@ function Shell() {
     }
   }, [selectedId]);
   const [tab, setTab] = useState<DetailTab>("overview");
-  const [filter, setFilter] = usePersisted<Filter>("filter", "all", ["all", "new", "junior", "saved", "tracked", "watched"]);
+  const [filter, setFilter] = usePersisted<Filter>("filter", "foryou", ["foryou", "all", "new", "junior", "saved", "tracked", "watched"]);
   const [sort, setSort] = usePersisted<Sort>("sort", "match", ["match", "newest", "company"]);
   const [source, setSource] = usePersisted<SourceFilter>("source", "all", ["all", "karriere-suedtirol", "noi-techpark", "suedtirolerjobs", "onboard"]);
   const [german, setGerman] = usePersisted<"any" | "ok">("german", "any", ["any", "ok"]);
   const [maxCommute, setMaxCommute] = usePersisted<string>("commute", "any", ["any", "30", "45", "60", "90"]);
   const [commutes, setCommutes] = useState<Record<string, Commute>>({});
+  const [aiRanks, setAiRanks] = useState<Record<string, AiRank>>({});
+  const [setupOpen, setSetupOpen] = useState(false);
+  const [askGpt, setAskGpt] = useState(false);
+  const [preparing, setPreparing] = useState<string | null>(null);
+  const [chat, setChat] = useState<{ lines: ChatLine[]; history: unknown[] }>({ lines: [], history: [] });
   const [aiKind, setAiKind] = useState<string | null>(null);
   const [checking, setChecking] = useState<{ done: number; total: number } | null>(null);
   const [query, setQuery] = useState("");
@@ -78,6 +90,7 @@ function Shell() {
   const searchRef = useRef<HTMLInputElement>(null);
   const jobsRef = useRef<Job[]>([]);
   const resortRef = useRef<() => void>(() => {});
+  const foundRef = useRef(0);
   // Latest tracks for async saves, so quick successive edits don't overwrite each other.
   const tracksRef = useRef<Record<string, Track>>({});
 
@@ -86,8 +99,10 @@ function Shell() {
   const refresh = useCallback(
     async (auto = false) => {
       setLoading(true);
+      foundRef.current = 0;
       try {
         const res = await api.fetchJobs();
+        foundRef.current = res.jobs.length;
         const before = new Set(jobsRef.current.map((j) => j.id));
         const fresh = before.size ? res.jobs.filter((j) => !before.has(j.id)) : [];
         jobsRef.current = res.jobs;
@@ -118,8 +133,10 @@ function Shell() {
   );
 
   useEffect(() => {
-    api.getSettings().then(setSettings);
+    const loadedSettings = api.getSettings();
+    loadedSettings.then(setSettings);
     api.getTracks().then(setTracks);
+    api.getAiRanks().then((r) => setAiRanks(r ?? {}));
     api.getDescriptions().then((d) => {
       setDescriptions(d);
       setTimeout(() => resortRef.current(), 0);
@@ -133,7 +150,12 @@ function Shell() {
           setJobs(cached);
         }
       })
-      .finally(() => refresh());
+      // Before setup there's nothing to search for yet.
+      .finally(() =>
+        loadedSettings.then((s) => {
+          if (s.onboarded) refresh();
+        }),
+      );
     const t = setInterval(() => tick((n) => n + 1), 30_000);
     return () => clearInterval(t);
   }, [refresh]);
@@ -141,10 +163,31 @@ function Shell() {
   // Auto-refresh.
   useEffect(() => {
     const minutes = settings?.auto_refresh_minutes ?? 0;
-    if (!minutes) return;
+    if (!minutes || !settings?.onboarded) return;
     const t = setInterval(() => refresh(true), minutes * 60_000);
     return () => clearInterval(t);
-  }, [settings?.auto_refresh_minutes, refresh]);
+  }, [settings?.auto_refresh_minutes, settings?.onboarded, refresh]);
+
+  // Rankings, saves and drafts from a connected AI tool (MCP) arrive here.
+  useEffect(() => {
+    const t = setInterval(async () => {
+      const n = await api.applyAiInbox().catch(() => 0);
+      if (n > 0) {
+        reloadAiData();
+        toast(`Your AI tool added ${n} update${n === 1 ? "" : "s"}`, "info");
+      }
+    }, 5000);
+    return () => clearInterval(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function reloadAiData() {
+    api.getTracks().then(setTracks);
+    api.getAiRanks().then((r) => {
+      setAiRanks(r ?? {});
+      setTimeout(() => resortRef.current(), 0);
+    });
+  }
 
   async function notify(fresh: Job[], fromWatched: Job[] = []) {
     if (!settings?.notify_new) return;
@@ -167,9 +210,12 @@ function Shell() {
   // only judge postings it has read. Text is cached, so each is fetched once.
   useEffect(() => {
     if (!jobs.length) return;
-    const wanted = (j: Job) => german === "ok" || j.junior || j.is_new || tracks[j.id];
+    // The closest title matches are read first, so For You sharpens where it counts.
+    const closeness = (j: Job) => fitsRef.current[j.id]?.score ?? 0;
+    const wanted = (j: Job) => german === "ok" || j.junior || j.is_new || tracks[j.id] || closeness(j) >= FOR_YOU_MIN;
     const queue = jobs
       .filter((j) => canLoadDescription(j) && descriptions[j.id] === undefined && wanted(j))
+      .sort((a, b) => closeness(b) - closeness(a))
       .slice(0, german === "ok" ? 800 : 60);
     if (!queue.length) {
       setChecking(null);
@@ -199,7 +245,7 @@ function Shell() {
     };
     // Only re-run when the job list or the filter changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobs, german]);
+  }, [jobs, german, settings?.person]);
 
   /* ---------- derived ---------- */
 
@@ -253,9 +299,23 @@ function Shell() {
   const watchedRef = useRef(isWatched);
   watchedRef.current = isWatched;
 
+  // How well each job suits this person, and why.
+  const signals = useMemo(() => learnSignals(tracks), [tracks]);
+  const fits = useMemo(() => {
+    const out: Record<string, Fit> = {};
+    if (!settings) return out;
+    for (const j of allJobs) {
+      out[j.id] = scoreJob(j, { person: settings.person, skills: settings.skills, analysis: analyses[j.id], commute: commutes[j.location], signals, aiRank: aiRanks[j.id] });
+    }
+    return out;
+  }, [allJobs, settings, analyses, commutes, signals, aiRanks]);
+  const fitsRef = useRef(fits);
+  fitsRef.current = fits;
+
   const matchesFilter = useCallback(
     (j: Job, f: Filter) => {
       const st = tracks[j.id]?.status;
+      if (f === "foryou") return !j.delisted && (!st || st === "saved") && (fitsRef.current[j.id]?.score ?? 0) >= FOR_YOU_MIN;
       if (f === "new") return j.is_new;
       if (f === "junior") return j.junior;
       if (f === "saved") return st === "saved";
@@ -263,7 +323,9 @@ function Shell() {
       if (f === "watched") return !j.delisted && isWatched(j.company);
       return !j.delisted;
     },
-    [tracks, isWatched],
+    // fits: For You membership follows the scores.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tracks, isWatched, fits],
   );
 
   // Commute times for every job town (cached in the backend, looked up once per town).
@@ -274,7 +336,11 @@ function Shell() {
     let live = true;
     api
       .commutes(locationKey.split("\n"))
-      .then((c) => live && setCommutes(c))
+      .then((c) => {
+        if (!live) return;
+        setCommutes(c ?? {});
+        setTimeout(() => resortRef.current(), 0);
+      })
       .catch(() => {});
     return () => {
       live = false;
@@ -392,6 +458,10 @@ function Shell() {
   resortRef.current = resort;
   const sortScores = useMemo(() => {
     const out: Record<string, number | null> = {};
+    if (filter === "foryou") {
+      for (const [id, f] of Object.entries(fitsRef.current)) out[id] = f.score;
+      return out;
+    }
     for (const [id, a] of Object.entries(analysesRef.current)) out[id] = a.score;
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -400,6 +470,10 @@ function Shell() {
   const visible = useMemo(() => {
     const hiddenOk = filter === "saved" || filter === "tracked";
     const list = base.filter((j) => matchesFilter(j, filter) && (hiddenOk || tracks[j.id]?.status !== "hidden"));
+    if (filter === "foryou") {
+      const s = (j: Job) => sortScores[j.id] ?? fits[j.id]?.score ?? 0;
+      return list.sort((a, b) => s(b) - s(a)).slice(0, FOR_YOU_MAX);
+    }
     const score = (j: Job) => sortScores[j.id] ?? (j.junior ? 40 : -1);
     const date = (j: Job) => j.published ?? new Date(j.first_seen * 1000).toISOString();
     return list.sort((a, b) =>
@@ -409,11 +483,12 @@ function Shell() {
           ? date(b).localeCompare(date(a))
           : score(b) - score(a) || date(b).localeCompare(date(a)),
     );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [base, filter, sort, matchesFilter, sortScores, tracks]);
 
   const counts = useMemo(() => {
     const c = {} as Record<Filter, number>;
-    for (const f of ["all", "new", "junior", "saved", "tracked", "watched"] as Filter[]) {
+    for (const f of ["foryou", "all", "new", "junior", "saved", "tracked", "watched"] as Filter[]) {
       c[f] = base.filter((j) => matchesFilter(j, f) && (f === "saved" || f === "tracked" || tracks[j.id]?.status !== "hidden")).length;
     }
     return c;
@@ -444,6 +519,11 @@ function Shell() {
     contact: prev?.contact ?? "",
     cv: prev?.cv ?? "",
     sent_message: prev?.sent_message ?? "",
+    hide_reason: prev?.hide_reason ?? "",
+    draft_subject: prev?.draft_subject ?? "",
+    draft_message: prev?.draft_message ?? "",
+    draft_to: prev?.draft_to ?? "",
+    draft_cv: prev?.draft_cv ?? "",
   });
 
   async function patchTrack(id: string, patch: Partial<Track>, message: string) {
@@ -493,6 +573,25 @@ function Shell() {
     const prev = tracksRef.current[job.id];
     const saved = await api.setTrack(job.id, { ...snapshot(job, prev), ...patch });
     if (saved) setTracks((t) => ({ ...t, [job.id]: saved }));
+  }
+
+  /** Hides a job from the feed and remembers why, which teaches the ranking. */
+  async function notForMe(job: Job, reason: string) {
+    const prev = tracksRef.current[job.id];
+    const saved = await api.setTrack(job.id, { ...snapshot(job, prev), status: "hidden", hide_reason: reason });
+    if (saved) setTracks((t) => ({ ...t, [job.id]: saved }));
+    toast("Got it, fewer like this", "ok", {
+      label: "Undo",
+      run: async () => {
+        const back = await api.setTrack(job.id, prev ?? null);
+        setTracks((t) => {
+          const copy = { ...t };
+          if (back) copy[job.id] = back;
+          else delete copy[job.id];
+          return copy;
+        });
+      },
+    });
   }
 
   async function moveTrack(id: string, status: Status) {
@@ -585,10 +684,17 @@ function Shell() {
     if (searchChanged) refresh();
   }
 
+  /** Jobs and For You share a view; choosing Jobs leaves the feed. */
+  function openView(v: View) {
+    if (v === "jobs" && filter === "foryou") setFilter("all");
+    setView(v);
+  }
+
   /* ---------- keyboard ---------- */
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      if (!settings?.onboarded || setupOpen) return;
       const typing = (e.target as HTMLElement).closest("input, textarea, select");
       if (e.key === "Escape") {
         if (shortcuts) setShortcuts(false);
@@ -598,7 +704,7 @@ function Shell() {
       }
       if (e.ctrlKey && ["1", "2", "3", "4"].includes(e.key)) {
         e.preventDefault();
-        setView((["jobs", "pipeline", "insights", "settings"] as View[])[Number(e.key) - 1]);
+        openView((["jobs", "pipeline", "insights", "settings"] as View[])[Number(e.key) - 1]);
         return;
       }
       if (e.ctrlKey && e.key.toLowerCase() === "k") {
@@ -653,6 +759,26 @@ function Shell() {
     ? `Auto-refresh every ${settings.auto_refresh_minutes < 60 ? `${settings.auto_refresh_minutes} min` : `${settings.auto_refresh_minutes / 60} h`}${settings.notify_new ? " with notifications" : ""}.`
     : "Auto-refresh is off.";
 
+  if (!settings) return <div className="h-full bg-void" />;
+  if (!settings.onboarded || setupOpen) {
+    return (
+      <Setup
+        settings={settings}
+        onFinish={async (next) => {
+          await api.saveSettings(next);
+          // Stays open after onboarding flips, for the "Your feed is ready" screen.
+          setSetupOpen(true);
+          setSettings(next);
+          setFilter("foryou");
+          setView("jobs");
+          await refresh(true);
+          return foundRef.current;
+        }}
+        onCancel={settings.onboarded ? () => setSetupOpen(false) : undefined}
+      />
+    );
+  }
+
   return (
     <div className="flex h-full flex-col">
       <TitleBar query={query} onQuery={(q) => (setQuery(q), setView("jobs"))} searchRef={searchRef} loading={loading} onRefresh={() => refresh()} status={status} />
@@ -668,7 +794,13 @@ function Shell() {
       <div className="flex min-h-0 flex-1">
         <Sidebar
           view={view}
-          onView={setView}
+          onView={openView}
+          forYou={view === "jobs" && filter === "foryou"}
+          forYouCount={Math.min(counts.foryou, FOR_YOU_MAX)}
+          onForYou={() => {
+            setFilter("foryou");
+            setView("jobs");
+          }}
           counts={{ jobs: counts.all, pipeline: pipelineCount }}
           alerts={{ pipeline: dueIds.length }}
           watching={watching}
@@ -716,6 +848,12 @@ function Shell() {
               ruleHidden={ruleHidden.size}
               onEditRules={() => setView("settings")}
               loading={loading}
+              fits={fits}
+              firstName={settings.person?.name?.trim().split(/\s+/)[0] ?? ""}
+              needsSetup={!settings.person?.fields?.length && !settings.person?.roles?.length}
+              onNotForMe={notForMe}
+              onAskGpt={() => setAskGpt(true)}
+              onRunSetup={() => setSetupOpen(true)}
             />
             {selected && settings ? (
               <JobDetail
@@ -736,6 +874,8 @@ function Shell() {
                 tab={tab}
                 onTab={setTab}
                 commute={commutes[selected.location]}
+                fit={fits[selected.id]}
+                onPrepare={() => setPreparing(selected.id)}
               />
             ) : (
               <div className="flex flex-1 flex-col items-center justify-center gap-2 bg-void text-chrome-500">
@@ -745,6 +885,7 @@ function Shell() {
             )}
           </>
         )}
+        {view === "assistant" && <AssistantView settings={settings} onSaveSettings={saveSettings} onChanged={reloadAiData} chat={chat} setChat={setChat} />}
         {view === "pipeline" && (
           <PipelineView
             tracks={tracks}
@@ -766,6 +907,7 @@ function Shell() {
           <SettingsView
             settings={settings}
             onSave={saveSettings}
+            onRunSetup={() => setSetupOpen(true)}
             onRestored={() => {
               api.getSettings().then(setSettings);
               api.getTracks().then(setTracks);
@@ -776,6 +918,27 @@ function Shell() {
         </ErrorBoundary>
       </div>
       {shortcuts && <ShortcutsModal onClose={() => setShortcuts(false)} />}
+      {askGpt && (
+        <GptRankModal
+          jobs={visible}
+          settings={settings}
+          postings={descriptions}
+          hasRanks={Object.keys(aiRanks).length > 0}
+          onImported={reloadAiData}
+          onClose={() => setAskGpt(false)}
+        />
+      )}
+      {preparing && jobsById[preparing] && (
+        <ApplyModal
+          job={jobsById[preparing]}
+          track={tracks[preparing]}
+          settings={settings}
+          posting={descriptions[preparing] ?? ""}
+          analysis={analyses[preparing] ?? null}
+          onSave={(patch) => updateTrack(jobsById[preparing], patch)}
+          onClose={() => setPreparing(null)}
+        />
+      )}
     </div>
   );
 }

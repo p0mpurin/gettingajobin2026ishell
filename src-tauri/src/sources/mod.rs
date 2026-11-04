@@ -33,6 +33,19 @@ const JUNIOR_WORDS: &[&str] = &[
     "apprendist", "lehrling", "neolaureat",
 ];
 
+/// Full posting text for a job, from whichever source it came from.
+pub async fn posting_text(client: &reqwest::Client, id: &str, url: &str) -> Result<String, String> {
+    if let Some(ks_id) = id.strip_prefix("ks-") {
+        karriere::description(client, ks_id).await
+    } else if id.starts_with("ob-") {
+        onboard::description(client, url).await
+    } else if id.starts_with("stj-") {
+        suedtiroler::description(client, url).await
+    } else {
+        noi::description(client, url).await
+    }
+}
+
 pub fn looks_junior(title: &str) -> bool {
     let t = title.to_lowercase();
     JUNIOR_WORDS.iter().any(|w| t.contains(w))

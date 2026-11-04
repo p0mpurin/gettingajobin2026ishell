@@ -67,6 +67,8 @@ export interface Analysis {
   postingLanguage: "German" | "Italian" | "English";
   junior: boolean;
   seniorSignals: string[];
+  /** The posting text, for recognising its field of work. */
+  fieldText: string;
 }
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9#+.]/g, "");
@@ -108,9 +110,26 @@ function detectPostingLanguage(text: string): Analysis["postingLanguage"] {
 
 const SENIOR = /\b(senior|lead|principal|head of|architect|teamlead|leiter|responsabile|\d\+?\s*(?:years|jahre|anni))\b/gi;
 
+const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** Whole-word search for a skill the vocabulary doesn't know, so any trade's skills count. */
+function mentions(text: string, skill: string): boolean {
+  const s = skill.trim();
+  if (s.length < 2) return false;
+  return new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegex(s)}(?![\\p{L}\\p{N}])`, "iu").test(text);
+}
+
+/** Known technologies named in a text, e.g. a CV. */
+export function detectSkills(text: string): string[] {
+  return VOCAB.filter(([, re]) => re.test(text)).map(([name]) => name);
+}
+
 export function analyze(title: string, text: string, skills: string[]): Analysis {
   const full = `${title}\n${text}`;
-  const found = VOCAB.filter(([, re]) => re.test(full)).map(([name]) => name);
+  const known = VOCAB.filter(([, re]) => re.test(full)).map(([name]) => name);
+  // The user's own skills count too, for trades and fields the vocabulary doesn't cover.
+  const own = skills.filter((s) => !VOCAB.some(([name]) => norm(name) === norm(s)) && mentions(full, s));
+  const found = [...known, ...own];
   const matched = found.filter((f) => userHas(f, skills));
   const missing = found.filter((f) => !userHas(f, skills));
   const seniorSignals = [...new Set((full.match(SENIOR) ?? []).map((s) => s.toLowerCase()))].slice(0, 4);
@@ -138,6 +157,7 @@ export function analyze(title: string, text: string, skills: string[]): Analysis
     postingLanguage: detectPostingLanguage(full),
     junior,
     seniorSignals,
+    fieldText: text,
   };
 }
 

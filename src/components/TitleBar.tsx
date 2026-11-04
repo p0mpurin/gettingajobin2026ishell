@@ -20,15 +20,6 @@ export function TitleBar({
   onRefresh: () => void;
   status: string;
 }) {
-  const [maximized, setMaximized] = useState(false);
-  useEffect(() => {
-    win().isMaximized().then(setMaximized);
-    const un = win().onResized(() => win().isMaximized().then(setMaximized));
-    return () => {
-      un.then((f) => f());
-    };
-  }, []);
-
   return (
     <header data-tauri-drag-region className="relative z-20 flex h-12 shrink-0 items-center gap-3 border-b border-line bg-void pl-4">
       <div data-tauri-drag-region className="flex w-[196px] items-center gap-2.5">
@@ -76,21 +67,36 @@ export function TitleBar({
         </button>
       </div>
 
-      <div className="flex h-full">
-        <button aria-label="Minimize" className="flex h-full w-11 items-center justify-center text-chrome-400 hover:bg-hover hover:text-chrome-50" onClick={() => win().minimize()}>
-          <Minus size={14} />
-        </button>
-        <button
-          aria-label={maximized ? "Restore" : "Maximize"}
-          className="flex h-full w-11 items-center justify-center text-chrome-400 hover:bg-hover hover:text-chrome-50"
-          onClick={() => win().toggleMaximize()}
-        >
-          {maximized ? <Copy size={12} className="-scale-x-100" /> : <Square size={11} />}
-        </button>
-        <button aria-label="Close" className="flex h-full w-11 items-center justify-center text-chrome-400 hover:bg-[#c42b1c] hover:text-white" onClick={() => win().close()}>
-          <X size={15} />
-        </button>
-      </div>
+      <WindowControls />
     </header>
+  );
+}
+
+export function WindowControls() {
+  const [maximized, setMaximized] = useState(false);
+  useEffect(() => {
+    win().isMaximized().then(setMaximized);
+    const un = win().onResized(() => win().isMaximized().then(setMaximized));
+    return () => {
+      un.then((f) => f());
+    };
+  }, []);
+
+  return (
+    <div className="flex h-full">
+      <button aria-label="Minimize" className="flex h-full w-11 items-center justify-center text-chrome-400 hover:bg-hover hover:text-chrome-50" onClick={() => win().minimize()}>
+        <Minus size={14} />
+      </button>
+      <button
+        aria-label={maximized ? "Restore" : "Maximize"}
+        className="flex h-full w-11 items-center justify-center text-chrome-400 hover:bg-hover hover:text-chrome-50"
+        onClick={() => win().toggleMaximize()}
+      >
+        {maximized ? <Copy size={12} className="-scale-x-100" /> : <Square size={11} />}
+      </button>
+      <button aria-label="Close" className="flex h-full w-11 items-center justify-center text-chrome-400 hover:bg-[#c42b1c] hover:text-white" onClick={() => win().close()}>
+        <X size={15} />
+      </button>
+    </div>
   );
 }

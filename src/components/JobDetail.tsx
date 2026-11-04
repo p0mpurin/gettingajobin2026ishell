@@ -24,6 +24,7 @@ import {
   Bus,
 } from "lucide-react";
 import { commuteLabel } from "./JobList";
+import type { Fit } from "../lib/foryou";
 import type { Job, Settings, Status, Track, Commute } from "../types";
 import { PIPELINE } from "../types";
 import { api, canLoadDescription } from "../lib/api";
@@ -88,8 +89,13 @@ export function JobDetail({
   tab,
   onTab,
   commute,
+  fit,
+  onPrepare,
 }: {
   commute?: Commute;
+  fit?: Fit;
+  /** Opens the application review screen. */
+  onPrepare: () => void;
   job: Job;
   track?: Track;
   settings: Settings;
@@ -201,14 +207,12 @@ export function JobDetail({
 
         {/* Actions */}
         <div className="mt-5 flex flex-wrap items-center gap-2">
-          <Button variant="chrome" icon={<Send size={14} />} onClick={() => openUrl(job.apply_url ?? job.url)}>
-            {job.apply_url ? "Apply" : "Open posting"}
+          <Button variant="chrome" icon={<Send size={14} />} onClick={onPrepare}>
+            {track?.draft_message ? "Review draft" : "Prepare application"}
           </Button>
-          {job.apply_url && (
-            <Button icon={<ExternalLink size={14} />} onClick={() => openUrl(job.url)}>
-              Listing
-            </Button>
-          )}
+          <Button icon={<ExternalLink size={14} />} onClick={() => openUrl(job.apply_url ?? job.url)}>
+            {job.apply_url ? "Apply page" : "Posting"}
+          </Button>
           <StatusStepper track={track} onSet={(s) => onStatus(job, s)} />
           <div className="ml-auto flex items-center gap-1">
             {job.company && (
@@ -221,6 +225,20 @@ export function JobDetail({
             </Button>
           </div>
         </div>
+
+        {fit && (fit.reasons.length > 0 || fit.warnings.length > 0) && (
+          <div className="mt-4 rounded-xl border border-line bg-white/[0.015] px-4 py-3 text-[12.5px] leading-relaxed">
+            <div className="mb-1 flex items-center gap-1.5 font-medium text-chrome-100">
+              <Sparkles size={12} /> Why this job · {fit.score}% for you
+            </div>
+            {fit.reasons.map((r) => (
+              <div key={r} className="text-chrome-300">{r}</div>
+            ))}
+            {fit.warnings.map((w) => (
+              <div key={w} className="text-amber">{w}</div>
+            ))}
+          </div>
+        )}
 
         {track?.interview_at && track.interview_at > Date.now() / 1000 - 7200 && track.interview_at - Date.now() / 1000 < 7 * 86400 && (
           <div className="mt-4 flex items-center gap-3 rounded-xl border border-violet/25 bg-violet/[0.06] px-4 py-3">

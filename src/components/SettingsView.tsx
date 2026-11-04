@@ -1,22 +1,30 @@
-import { useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useState, type KeyboardEvent, type ReactNode } from "react";
 import { ask, open, save } from "@tauri-apps/plugin-dialog";
-import { ArchiveRestore, DatabaseBackup, Download, FileSpreadsheet, FolderInput, FolderOpen, Plus, X } from "lucide-react";
+import { ArchiveRestore, ClipboardCopy, DatabaseBackup, Download, FileSpreadsheet, FolderInput, FolderOpen, KeyRound, Plus, Sparkles, Trash2, X } from "lucide-react";
 import type { Settings } from "../types";
 import { DISTRICTS } from "../types";
 import { SUGGESTED_WORDS } from "../lib/rules";
 import { api } from "../lib/api";
 import { Button, Panel, SectionTitle, useToast } from "./ui";
+import { AiServiceForm } from "./AssistantView";
 
 export function SettingsView({
   settings,
   onSave,
   onRestored,
+  onRunSetup,
 }: {
   settings: Settings;
   onSave: (s: Settings) => Promise<void>;
   /** Reload everything after a backup was restored. */
   onRestored: () => void;
+  onRunSetup: () => void;
 }) {
+  const [apiKey, setApiKey] = useState("");
+  const [hasKey, setHasKey] = useState(false);
+  useEffect(() => {
+    api.aiHasKey().then(setHasKey).catch(() => {});
+  }, []);
   const toast = useToast();
   const [s, setS] = useState(settings);
   const dirty = JSON.stringify(s) !== JSON.stringify(settings);
@@ -223,7 +231,15 @@ export function SettingsView({
         </Panel>
 
         <Panel className="space-y-5 p-5">
-          <SectionTitle>Matching & AI prompts</SectionTitle>
+          <SectionTitle
+            right={
+              <Button size="sm" icon={<Sparkles size={12} />} onClick={onRunSetup}>
+                Run setup again
+              </Button>
+            }
+          >
+            Matching & AI prompts
+          </SectionTitle>
           <Row label="My skills" hint="Used for the match score on every job.">
             <TagInput values={s.skills} onChange={(v) => set("skills", v)} placeholder="Add a skill…" />
           </Row>
@@ -233,6 +249,61 @@ export function SettingsView({
               onChange={(e) => set("profile", e.target.value)}
               className="chrome-border selectable h-72 w-full resize-y rounded-lg bg-void p-3 font-mono text-[12px] leading-relaxed text-chrome-200 outline-none"
             />
+          </Row>
+        </Panel>
+
+        <Panel className="space-y-5 p-5">
+          <SectionTitle>AI</SectionTitle>
+          <p className="text-[12.5px] leading-relaxed text-chrome-400">For the Assistant view. ChatGPT by copy and paste needs none of this: use "Rank with ChatGPT" in For You.</p>
+          <AiServiceForm base={s.ai_base_url} model={s.ai_model} apiKey={apiKey} hasKey={hasKey} onBase={(v) => set("ai_base_url", v)} onModel={(v) => set("ai_model", v)} onKey={setApiKey} />
+          <div className="flex flex-wrap gap-2">
+            <Button
+              icon={<KeyRound size={14} />}
+              disabled={!apiKey.trim()}
+              onClick={async () => {
+                try {
+                  await api.aiSetKey(apiKey);
+                  setApiKey("");
+                  setHasKey(true);
+                  toast("API key saved");
+                } catch (e) {
+                  toast(String(e), "warn");
+                }
+              }}
+            >
+              Save key
+            </Button>
+            {hasKey && (
+              <Button
+                variant="ghost"
+                icon={<Trash2 size={14} />}
+                onClick={async () => {
+                  await api.aiClearKey();
+                  setHasKey(false);
+                  toast("API key removed");
+                }}
+              >
+                Remove key
+              </Button>
+            )}
+          </div>
+          <Row
+            label="Connect another AI tool (MCP)"
+            hint="For Claude Desktop, Cursor and others that run on this computer: add this to the tool's MCP settings. It can read your profile and jobs, rank jobs, save jobs and write drafts. It can't send anything. ChatGPT itself can't reach apps on your computer without a public tunnel, so use copy and paste there."
+          >
+            <Button
+              icon={<ClipboardCopy size={14} />}
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(await api.mcpConfig());
+                  toast("Connection details copied");
+                } catch (e) {
+                  toast(String(e), "warn");
+                }
+              }}
+            >
+              Copy connection details
+            </Button>
           </Row>
         </Panel>
 
@@ -326,7 +397,7 @@ function Toggle({ label, checked, onChange }: { label: string; checked: boolean;
   );
 }
 
-function TagInput({ values, onChange, placeholder }: { values: string[]; onChange: (v: string[]) => void; placeholder: string }) {
+export function TagInput({ values, onChange, placeholder }: { values: string[]; onChange: (v: string[]) => void; placeholder: string }) {
   const [draft, setDraft] = useState("");
   function add() {
     const v = draft.trim();
@@ -351,7 +422,7 @@ function TagInput({ values, onChange, placeholder }: { values: string[]; onChang
           </button>
         </span>
       ))}
-      <input value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={key} onBlur={add} placeholder={placeholder} className="h-6 min-w-24 flex-1 bg-transparent px-1 text-[12px] outline-none placeholder:text-chrome-600" />
+      <input data-tags value={draft} onChange={(e) => setDraft(e.target.value)} onKeyDown={key} onBlur={add} placeholder={placeholder} className="h-6 min-w-24 flex-1 bg-transparent px-1 text-[12px] outline-none placeholder:text-chrome-600" />
       {draft && (
         <button onClick={add} className="text-chrome-400 hover:text-chrome-50" aria-label="Add">
           <Plus size={13} />

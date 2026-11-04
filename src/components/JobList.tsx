@@ -1,15 +1,24 @@
 import { memo, useEffect, useRef } from "react";
 import { useState } from "react";
-import { ArrowDownWideNarrow, BellRing, BookmarkPlus, Bus, Copy, EyeOff, Inbox, Languages, Star, X } from "lucide-react";
+import { ArrowDownWideNarrow, BellRing, BookmarkPlus, Bus, Copy, EyeOff, Inbox, Languages, PenLine, Sparkles, Star, ThumbsDown, TriangleAlert, X } from "lucide-react";
 import type { Commute, Job, Track } from "../types";
 import { PIPELINE } from "../types";
 import type { Analysis, GermanNeed } from "../lib/match";
+import type { Fit } from "../lib/foryou";
 import { ageDays, shortDate, ago } from "../lib/format";
-import { Chip, ScoreRing } from "./ui";
+import { Button, Chip, ScoreRing } from "./ui";
 
-export type Filter = "all" | "new" | "junior" | "saved" | "tracked" | "watched";
+export type Filter = "foryou" | "all" | "new" | "junior" | "saved" | "tracked" | "watched";
 export type Sort = "match" | "newest" | "company";
 export type SourceFilter = "all" | "karriere-suedtirol" | "noi-techpark" | "suedtirolerjobs" | "onboard";
+
+const NOT_FOR_ME: [string, string][] = [
+  ["field", "Wrong field"],
+  ["senior", "Too senior"],
+  ["far", "Too far"],
+  ["company", "This company"],
+  ["other", "Other"],
+];
 
 const FILTERS: { id: Filter; label: string }[] = [
   { id: "all", label: "All" },
@@ -52,6 +61,12 @@ export function JobList({
   ruleHidden,
   onEditRules,
   loading,
+  fits,
+  firstName,
+  needsSetup,
+  onNotForMe,
+  onAskGpt,
+  onRunSetup,
 }: {
   jobs: Job[];
   tracks: Record<string, Track>;
@@ -89,7 +104,16 @@ export function JobList({
   ruleHidden: number;
   onEditRules: () => void;
   loading: boolean;
+  /** For You scores and reasons per job. */
+  fits: Record<string, Fit>;
+  firstName: string;
+  /** Existing users who haven't told the app what they want yet. */
+  needsSetup: boolean;
+  onNotForMe: (job: Job, reason: string) => void;
+  onAskGpt: () => void;
+  onRunSetup: () => void;
 }) {
+  const forYou = filter === "foryou";
   const [naming, setNaming] = useState(false);
   const [viewName, setViewName] = useState("");
   const listRef = useRef<HTMLDivElement>(null);
@@ -102,7 +126,26 @@ export function JobList({
   return (
     <section className="flex w-[360px] shrink-0 flex-col border-r xl:w-[440px] border-line bg-base">
       <div className="space-y-2.5 border-b border-line px-3 py-3">
-        <div className="flex flex-wrap items-center gap-1.5">
+        {forYou && (
+          <div className="flex items-center gap-3 px-1 pt-0.5">
+            <div className="min-w-0">
+              <h2 className="chrome-text text-[20px] font-semibold leading-tight tracking-tight">For You</h2>
+              <p className="truncate text-[12px] text-chrome-500">{firstName ? `Ranked for ${firstName}` : "Ranked for you"} · best first</p>
+            </div>
+            <Button size="sm" className="ml-auto" icon={<Sparkles size={12} />} onClick={onAskGpt}>
+              Rank with ChatGPT
+            </Button>
+          </div>
+        )}
+        {forYou && needsSetup && (
+          <button onClick={onRunSetup} className="chrome-border sheen flex w-full items-center gap-2.5 rounded-xl bg-raised p-3 text-left transition hover:bg-hover">
+            <Sparkles size={15} className="shrink-0 text-chrome-200" />
+            <span className="min-w-0 text-[12.5px] leading-snug text-chrome-300">
+              <span className="font-semibold text-chrome-50">Tell the app what you want.</span> A one-minute setup makes this feed far better. Your data stays as it is.
+            </span>
+          </button>
+        )}
+        {!forYou && <div className="flex flex-wrap items-center gap-1.5">
           {views.map((v) => (
             <span
               key={v.name}
@@ -147,8 +190,8 @@ export function JobList({
               <BookmarkPlus size={11} /> Save view
             </button>
           )}
-        </div>
-        <div className="chrome-border flex rounded-lg bg-void p-0.5">
+        </div>}
+        {!forYou && <div className="chrome-border flex rounded-lg bg-void p-0.5">
           {FILTERS.map((f) => (
             <button
               key={f.id}
@@ -161,10 +204,10 @@ export function JobList({
               <span className={`text-[10px] tabular-nums ${filter === f.id ? "text-black/55" : "text-chrome-600"}`}>{counts[f.id]}</span>
             </button>
           ))}
-        </div>
+        </div>}
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 text-[12px]">
-          <ArrowDownWideNarrow size={13} className="text-chrome-500" />
-          <Select value={sort} onChange={(v) => onSort(v as Sort)} options={[["match", "Best match"], ["newest", "Newest"], ["company", "Company"]]} />
+          {!forYou && <ArrowDownWideNarrow size={13} className="text-chrome-500" />}
+          {!forYou && <Select value={sort} onChange={(v) => onSort(v as Sort)} options={[["match", "Best match"], ["newest", "Newest"], ["company", "Company"]]} />}
           <Select
             value={source}
             onChange={(v) => onSource(v as SourceFilter)}
@@ -223,7 +266,9 @@ export function JobList({
           <div className="flex h-full flex-col items-center justify-center gap-2 text-chrome-500">
             <Inbox size={28} strokeWidth={1.4} />
             <p className="text-[13px]">
-              {filter === "new"
+              {forYou
+                ? "Nothing matches closely yet."
+                : filter === "new"
                 ? "No new postings yet."
                 : filter === "watched"
                   ? "No jobs from watched companies."
@@ -231,6 +276,14 @@ export function JobList({
                     ? "Checking postings…"
                     : "No jobs match these filters."}
             </p>
+            {forYou && (
+              <div className="flex max-w-[280px] flex-col items-center gap-3 text-center text-[12px] leading-relaxed text-chrome-600">
+                <p>Add more fields or job titles, or see everything in Jobs.</p>
+                <Button size="sm" onClick={onRunSetup}>
+                  Update what you're looking for
+                </Button>
+              </div>
+            )}
             {filter === "watched" && (
               <p className="max-w-[260px] text-center text-[12px] leading-relaxed text-chrome-600">
                 Star a company from any of its jobs to watch it. You'll get a notification when it posts something new.
@@ -251,6 +304,8 @@ export function JobList({
             analysis={analyses[job.id]}
             german={germanNeeds[job.id]}
             commute={commutes[job.location]}
+            fit={forYou ? fits[job.id] : undefined}
+            onNotForMe={forYou ? onNotForMe : undefined}
             due={dueIds.includes(job.id)}
             watched={isWatched(job.company)}
             selected={job.id === selectedId}
@@ -268,6 +323,8 @@ const Row = memo(function Row({
   analysis,
   german,
   commute,
+  fit,
+  onNotForMe,
   due,
   watched,
   selected,
@@ -278,6 +335,8 @@ const Row = memo(function Row({
   analysis?: Analysis;
   german?: GermanNeed;
   commute?: Commute;
+  fit?: Fit;
+  onNotForMe?: (job: Job, reason: string) => void;
   due: boolean;
   watched: boolean;
   selected: boolean;
@@ -285,15 +344,17 @@ const Row = memo(function Row({
 }) {
   const stage = track && PIPELINE.find((p) => p.id === track.status);
   const age = ageDays(job.published);
+  const [asking, setAsking] = useState(false);
   return (
+    <div className="group relative mb-1">
     <button
       data-id={job.id}
       onClick={() => onSelect(job.id)}
-      className={`group relative mb-1 flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition ${
+      className={`relative flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition ${
         selected ? "chrome-border bg-elevated" : "hover:bg-raised"
       } ${track?.status === "hidden" ? "opacity-40" : ""}`}
     >
-      <ScoreRing score={analysis?.score ?? null} size={36} />
+      {fit ? <ScoreRing score={fit.score} size={36} /> : <ScoreRing score={analysis?.score ?? null} size={36} />}
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-1.5">
           {job.is_new && <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-sky shadow-[0_0_8px] shadow-sky" title="New in the last 24 hours" />}
@@ -304,7 +365,18 @@ const Row = memo(function Row({
           {job.company}
           {job.location && <span className="text-chrome-600"> · {job.location}</span>}
         </div>
+        {fit && fit.reasons.length > 0 && <div className="mt-1 line-clamp-2 text-[12px] leading-snug text-chrome-200">{fit.reasons.slice(0, 2).join(" · ")}</div>}
         <div className="mt-1.5 flex flex-wrap items-center gap-1">
+          {track?.draft_message && (
+            <Chip tone="sky">
+              <PenLine size={10} /> Draft ready
+            </Chip>
+          )}
+          {fit?.warnings.map((w) => (
+            <Chip key={w} tone="amber">
+              <TriangleAlert size={10} /> {w}
+            </Chip>
+          ))}
           {job.junior && <Chip tone="mint">Junior</Chip>}
           {stage && <Chip tone={toneOf(stage.id)}>{stage.label}</Chip>}
           {due && (
@@ -312,7 +384,7 @@ const Row = memo(function Row({
               <BellRing size={10} /> Follow up
             </Chip>
           )}
-          {(german === "required" || german === "implied") && (
+          {!fit && (german === "required" || german === "implied") && (
             <Chip tone="neutral" className="text-chrome-400" >
               {german === "required" ? "German required" : "German posting"}
             </Chip>
@@ -337,6 +409,30 @@ const Row = memo(function Row({
         {job.published ? shortDate(job.published) : ago(job.first_seen)}
       </div>
     </button>
+    {onNotForMe && !asking && (
+      <button
+        onClick={() => setAsking(true)}
+        title="Not for me"
+        aria-label="Not for me"
+        className="absolute bottom-2.5 right-2.5 flex h-6 w-6 items-center justify-center rounded-md bg-elevated text-chrome-500 opacity-0 transition hover:text-chrome-50 focus:opacity-100 group-hover:opacity-100"
+      >
+        <ThumbsDown size={12} />
+      </button>
+    )}
+    {onNotForMe && asking && (
+      <div className="animate-rise mx-2 mb-1 flex flex-wrap items-center gap-1 rounded-lg border border-line-strong bg-raised p-1.5 text-[11.5px]">
+        <span className="px-1 text-chrome-500">Not for me:</span>
+        {NOT_FOR_ME.map(([id, label]) => (
+          <button key={id} onClick={() => onNotForMe(job, id)} className="rounded-md px-1.5 py-0.5 text-chrome-200 transition hover:bg-hover hover:text-chrome-50">
+            {label}
+          </button>
+        ))}
+        <button onClick={() => setAsking(false)} aria-label="Cancel" className="ml-auto rounded-md p-0.5 text-chrome-600 hover:text-chrome-100">
+          <X size={12} />
+        </button>
+      </div>
+    )}
+    </div>
   );
 });
 

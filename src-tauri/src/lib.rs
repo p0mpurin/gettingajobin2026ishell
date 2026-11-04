@@ -1,8 +1,11 @@
+mod ai;
 mod backup;
 mod commute;
 mod export;
+mod mcp;
 mod sources;
 mod store;
+mod tools;
 
 use futures::stream::{self, StreamExt};
 use sources::Job;
@@ -193,15 +196,7 @@ async fn job_description(state: State<'_, AppState>, id: String, url: String, re
             return Ok(text.clone());
         }
     }
-    let text = if let Some(ks_id) = id.strip_prefix("ks-") {
-        sources::karriere::description(&state.client, ks_id).await?
-    } else if id.starts_with("ob-") {
-        sources::onboard::description(&state.client, &url).await?
-    } else if id.starts_with("stj-") {
-        sources::suedtiroler::description(&state.client, &url).await?
-    } else {
-        sources::noi::description(&state.client, &url).await?
-    };
+    let text = sources::posting_text(&state.client, &id, &url).await?;
     let mut store = state.store.lock().unwrap();
     store.data.descriptions.insert(id, text.clone());
     store.save()?;
@@ -267,6 +262,92 @@ fn import_backup(state: State<AppState>, path: String) -> Result<backup::Restore
     Ok(backup::RestoreSummary { tracks, safety_copy: safety.to_string_lossy().into_owned() })
 }
 
+/// Text of a CV the user picked: PDF, or plain text and Markdown.
+#[tauri::command]
+fn read_cv(path: String) -> Result<String, String> {
+    const MAX_BYTES: u64 = 15 * 1024 * 1024;
+    let size = std::fs::metadata(&path).map_err(|e| e.to_string())?.len();
+    if size > MAX_BYTES {
+        return Err("That file is too large to be a CV.".into());
+    }
+    if path.to_lowercase().ends_with(".pdf") {
+        // The PDF reader can panic on unusual files; that shouldn't end the app.
+        let parsed = std::panic::catch_unwind(|| pdf_extract::extract_text(&path));
+        let text = match parsed {
+            Ok(Ok(t)) => t,
+            _ => return Err("Couldn't read that PDF. Paste the text instead.".into()),
+        };
+        if text.trim().is_empty() {
+            return Err("That PDF has no readable text (it may be a scan). Paste the text instead.".into());
+        }
+        return Ok(text);
+    }
+    std::fs::read_to_string(&path).map_err(|_| "Couldn't read that file. Use a PDF or a text file, or paste the text.".to_string())
+}
+
+#[tauri::command]
+fn get_ai_ranks(state: State<AppState>) -> HashMap<String, store::AiRank> {
+    state.store.lock().unwrap().data.ai_ranks.clone()
+}
+
+/// Stores a ranking the user pasted back from an AI. Same rules as the tool.
+#[tauri::command]
+fn import_ai_ranks(state: State<AppState>, rankings: serde_json::Value) -> Result<serde_json::Value, String> {
+    let mut store = state.store.lock().unwrap();
+    let result = tools::write(&mut store.data, "rank_jobs", &serde_json::json!({ "rankings": rankings }))?;
+    store.save()?;
+    Ok(result)
+}
+
+#[tauri::command]
+fn clear_ai_ranks(state: State<AppState>) -> Result<(), String> {
+    let mut store = state.store.lock().unwrap();
+    store.data.ai_ranks.clear();
+    store.save()
+}
+
+#[tauri::command]
+async fn ai_chat(state: State<'_, AppState>, messages: Vec<serde_json::Value>) -> Result<ai::ChatReply, String> {
+    ai::chat_with_settings(&state.client, &state.store, messages).await
+}
+
+#[tauri::command]
+fn ai_set_key(key: String) -> Result<(), String> {
+    ai::set_key(&key)
+}
+
+#[tauri::command]
+fn ai_has_key() -> bool {
+    ai::has_key()
+}
+
+#[tauri::command]
+fn ai_clear_key() -> Result<(), String> {
+    ai::clear_key()
+}
+
+/// Applies rankings, saves and drafts waiting from the MCP connector.
+/// Returns how many arrived, so the UI can reload and say so.
+#[tauri::command]
+fn apply_ai_inbox(state: State<AppState>) -> Result<usize, String> {
+    let mut store = state.store.lock().unwrap();
+    let dir = store.dir();
+    let applied = tools::drain_inbox(&dir, &mut store.data);
+    if applied > 0 {
+        store.save()?;
+        store.mirror();
+    }
+    Ok(applied)
+}
+
+/// The config an AI tool needs to start this app's MCP connector.
+#[tauri::command]
+fn mcp_config() -> Result<String, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let config = serde_json::json!({"mcpServers": {"bolzano-jobs": {"command": exe, "args": ["--mcp"]}}});
+    serde_json::to_string_pretty(&config).map_err(|e| e.to_string())
+}
+
 /// Opens the folder holding state.json and backups/ in Explorer.
 #[tauri::command]
 fn open_data_folder(state: State<AppState>) -> Result<(), String> {
@@ -298,15 +379,27 @@ fn portable_dir() -> Option<std::path::PathBuf> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let portable = portable_dir();
-    tauri::Builder::default()
-        // Must come first: a second launch focuses the running window instead.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+    // Started by an AI tool: serve MCP and stay out of the window system entirely.
+    if std::env::args().any(|a| a == "--mcp") {
+        let dir = portable.or_else(|| std::env::var_os("APPDATA").map(|d| std::path::PathBuf::from(d).join("com.p0mpurin.bolzanojobs")));
+        if let Some(dir) = dir {
+            mcp::serve(dir);
+        }
+        return;
+    }
+    let mut builder = tauri::Builder::default();
+    // Must come first: a second launch focuses the running window instead.
+    // A throwaway data folder is a separate test run, so it may run alongside.
+    if std::env::var_os("BOLZANO_JOBS_DATA").is_none() {
+        builder = builder.plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.unminimize();
                 let _ = w.show();
                 let _ = w.set_focus();
             }
-        }))
+        }));
+    }
+    builder
         .plugin({
             let ws = tauri_plugin_window_state::Builder::default();
             match &portable {
@@ -333,10 +426,14 @@ pub fn run() {
             }
             window.build()?;
             let client = reqwest::Client::builder()
-                .user_agent("BolzanoJobs/1.4 (personal job search app)")
+                .user_agent(concat!("BolzanoJobs/", env!("CARGO_PKG_VERSION"), " (personal job search app)"))
                 .timeout(std::time::Duration::from_secs(20))
                 .build()?;
             let store = Store::load(dir.clone());
+            let mut store = store;
+            if tools::drain_inbox(&dir, &mut store.data) > 0 {
+                store.save()?;
+            }
             backup::auto(&dir, &store.data);
             store.mirror();
             app.manage(AppState { store: Mutex::new(store), client });
@@ -358,8 +455,48 @@ pub fn run() {
             export_backup,
             import_backup,
             open_data_folder,
-            write_text_file
+            write_text_file,
+            read_cv,
+            get_ai_ranks,
+            import_ai_ranks,
+            clear_ai_ranks,
+            ai_chat,
+            ai_set_key,
+            ai_has_key,
+            ai_clear_key,
+            apply_ai_inbox,
+            mcp_config
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    /// Reads a real PDF named by CV_TEST_PDF: `cargo test -- --ignored`.
+    #[test]
+    #[ignore]
+    fn reads_a_pdf_cv() {
+        let path = std::env::var("CV_TEST_PDF").expect("CV_TEST_PDF");
+        let text = super::read_cv(path).unwrap();
+        assert!(text.len() > 200 && text.contains('@'));
+    }
+
+    #[test]
+    fn refuses_files_it_cannot_read() {
+        assert!(super::read_cv("does-not-exist.pdf".into()).is_err());
+    }
+
+    /// With no search terms, the sources list every job: `cargo test -- --ignored`.
+    #[tokio::test]
+    #[ignore]
+    async fn no_terms_lists_all_jobs() {
+        let client = reqwest::Client::builder().user_agent("BolzanoJobs-test").build().unwrap();
+        let settings = super::Settings::default();
+        assert!(settings.terms.is_empty() && settings.profile.is_empty(), "fresh installs carry no one's data");
+        let karriere = super::sources::karriere::fetch(&client, &settings).await.unwrap();
+        let stj = super::sources::suedtiroler::fetch(&client, &settings).await.unwrap();
+        println!("karriere {} suedtiroler {}", karriere.len(), stj.len());
+        assert!(karriere.len() > 100 && stj.len() > 20);
+    }
 }

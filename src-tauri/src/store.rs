@@ -33,6 +33,15 @@ pub struct Settings {
     pub notify_new: bool,
     /// Home town for public-transport commute times (German or Italian name).
     pub home_town: String,
+    /// Setup has been completed (or skipped by an existing user).
+    pub onboarded: bool,
+    /// Structured profile from setup; `profile` is the text built from it.
+    pub person: Person,
+    /// OpenAI-compatible service for the built-in assistant.
+    pub ai_base_url: String,
+    pub ai_model: String,
+    /// The user has confirmed what gets shared with that service.
+    pub ai_consent: bool,
     /// Where "Export to Obsidian" writes Applications.md.
     pub vault_path: String,
     /// A second folder (e.g. OneDrive) that gets a copy of the backup on every change.
@@ -53,6 +62,44 @@ pub struct Settings {
     pub weekly_goal: u32,
 }
 
+/// What setup asks for. Everything but the name is optional.
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct Person {
+    pub name: String,
+    pub email: String,
+    pub phone: String,
+    pub links: String,
+    /// "student" | "junior" | "mid" | "senior", or empty.
+    pub level: String,
+    /// Job titles the user wants, in their own words.
+    pub roles: Vec<String>,
+    /// Fields of work, ids from lib/fields.ts.
+    pub fields: Vec<String>,
+    pub job_types: Vec<String>,
+    pub languages: Vec<LanguageLevel>,
+    /// Longest acceptable public-transport trip in minutes (0 = don't mind).
+    pub max_commute: u32,
+    /// CV text or a free description of their experience.
+    pub background: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct LanguageLevel {
+    pub lang: String,
+    pub level: String,
+}
+
+/// An AI's opinion of one job for the For You feed.
+#[derive(Serialize, Deserialize, Clone, Default)]
+#[serde(default)]
+pub struct AiRank {
+    pub score: u32,
+    pub reason: String,
+    pub at: u64,
+}
+
 #[derive(Serialize, Deserialize, Clone, Default)]
 #[serde(default)]
 pub struct SavedView {
@@ -67,25 +114,23 @@ pub struct SavedView {
 impl Default for Settings {
     fn default() -> Self {
         Self {
-            terms: ["Software", "Developer", "Entwickler", "IT", "Informatik", "Sviluppatore", "Web"]
-                .map(String::from)
-                .to_vec(),
-            districts: vec![43, 50],
+            // Setup fills in the search terms; with none, every job is listed.
+            terms: Vec::new(),
+            districts: vec![43, 50, 44, 45, 48, 51, 46, 47],
             include_noi: true,
             include_suedtiroler: true,
             onboard_companies: ["alpitronic", "acsgroup", "ris", "hogast-it", "unibz", "reguest"].map(String::from).to_vec(),
             onboard_local_only: true,
-            profile: include_str!("default_profile.md").to_string(),
-            skills: [
-                "C#", ".NET", "C", "C++", "Python", "JavaScript", "TypeScript", "Rust", "SQL", "HTML",
-                "CSS", "React", "Tailwind", "Tauri", "Flask", "Git", "GitHub", "WebRTC", "REST", "API",
-                "Windows", "Linux", "Networking", "IT Support", "Debugging", "OOP",
-            ]
-            .map(String::from)
-            .to_vec(),
+            profile: String::new(),
+            skills: Vec::new(),
             auto_refresh_minutes: 60,
             notify_new: true,
-            home_town: "Kaltern".into(),
+            home_town: String::new(),
+            onboarded: false,
+            person: Person::default(),
+            ai_base_url: "https://api.openai.com/v1".into(),
+            ai_model: "gpt-4o-mini".into(),
+            ai_consent: false,
             vault_path: String::new(),
             mirror_path: String::new(),
             follow_up_days: 7,
@@ -126,6 +171,13 @@ pub struct Track {
     pub cv: String,
     /// The application message that was sent.
     pub sent_message: String,
+    /// Why the user said "Not for me", which teaches the For You feed.
+    pub hide_reason: String,
+    /// A draft waiting for review. Nothing here has been sent.
+    pub draft_subject: String,
+    pub draft_message: String,
+    pub draft_to: String,
+    pub draft_cv: String,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -152,6 +204,9 @@ pub struct Data {
     /// Commute cache, "Home|Town" -> trip summary.
     #[serde(default)]
     pub commutes: HashMap<String, crate::commute::Commute>,
+    /// AI rankings for the For You feed, job id -> rank.
+    #[serde(default)]
+    pub ai_ranks: HashMap<String, AiRank>,
     /// Legacy v0.1 field (job id -> status), migrated into `tracks` on load.
     #[serde(default, skip_serializing)]
     status: HashMap<String, String>,
@@ -183,6 +238,11 @@ impl Store {
         if data.cache_version < CACHE_VERSION {
             data.descriptions.clear();
             data.cache_version = CACHE_VERSION;
+        }
+        // Anyone with a profile or applications from before setup existed keeps
+        // their data and doesn't get sent through setup.
+        if !data.settings.onboarded && (!data.tracks.is_empty() || !data.settings.profile.trim().is_empty()) {
+            data.settings.onboarded = true;
         }
         Self { path, data }
     }

@@ -1,4 +1,4 @@
-import { BarChart3, Briefcase, Keyboard, KanbanSquare, Settings2 } from "lucide-react";
+import { BarChart3, Bot, Briefcase, Keyboard, KanbanSquare, Settings2, Sparkles } from "lucide-react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { View } from "../types";
 import { MORE_SOURCES } from "../types";
@@ -21,6 +21,9 @@ export function Sidebar({
   watching = [],
   onWatched,
   weekly,
+  forYou,
+  onForYou,
+  forYouCount,
 }: {
   view: View;
   onView: (v: View) => void;
@@ -34,12 +37,32 @@ export function Sidebar({
   onWatched?: (name: string) => void;
   /** Applications this week against the weekly goal. */
   weekly?: { done: number; goal: number };
+  /** The For You feed is showing. */
+  forYou: boolean;
+  onForYou: () => void;
+  forYouCount: number;
 }) {
   return (
     <nav className="flex w-[180px] shrink-0 xl:w-[212px] flex-col border-r border-line bg-void px-3 py-4">
+      <div className="mb-3 space-y-0.5">
+        <button
+          onClick={onForYou}
+          className={`flex h-10 w-full items-center gap-2.5 rounded-lg px-2.5 text-[13px] font-semibold transition ${forYou ? "chrome-face" : "chrome-border bg-raised text-chrome-100 hover:bg-hover"}`}
+        >
+          <Sparkles size={15} />
+          For You
+          <span className={`ml-auto text-[11px] font-medium tabular-nums ${forYou ? "text-black/55" : "text-chrome-500"}`}>{forYouCount}</span>
+        </button>
+        <button
+          onClick={() => onView("assistant")}
+          className={`relative flex h-9 w-full items-center gap-2.5 rounded-lg px-2.5 text-[13px] font-medium transition ${view === "assistant" ? "chrome-border bg-elevated text-chrome-50" : "text-chrome-400 hover:bg-raised hover:text-chrome-100"}`}
+        >
+          <Bot size={15} /> Assistant
+        </button>
+      </div>
       <div className="space-y-0.5">
         {NAV.map(({ id, label, icon: Icon, key }) => {
-          const active = view === id;
+          const active = view === id && !forYou;
           return (
             <button
               key={id}

@@ -1,6 +1,6 @@
 [package]
 name = "bolzano-jobs"
-version = "1.4.0"
+version = "1.5.0"
 edition = "2021"
 
 [lib]
@@ -23,6 +23,8 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 tokio = { version = "1", features = ["time", "macros"] }
 scraper = "0.20"
 futures = "0.3"
+pdf-extract = "0.7"
+keyring = { version = "3", features = ["windows-native"] }
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "net", "io-util"] }

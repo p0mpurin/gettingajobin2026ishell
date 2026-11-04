@@ -1,11 +1,18 @@
 # Bolzano Jobs
 
-A desktop job-search cockpit for South Tyrol. It gathers IT jobs from local sources and scores each one against your skills. It also tracks your applications through a pipeline and writes AI prompts for honest application emails.
+A desktop job-search cockpit for South Tyrol, for any field of work. It gathers jobs from local sources and scores each one against your skills. It also tracks your applications through a pipeline and writes AI prompts for honest application emails.
 
 Built with Tauri v2, Rust and React, with an OLED-black, chrome-accented UI.
 
 ## Features
 
+- **Setup on first start:** a one-minute, one-question-per-screen setup. Drop a CV (read locally) and most answers fill themselves in. Nothing is shared until you connect an AI.
+- **For You:** your jobs ranked by role, field, skills, languages, experience, commute and freshness, with the reasons shown. It learns from what you save, apply to and mark "Not for me".
+- **AI, three ways:**
+  - *Copy and paste:* "Rank with ChatGPT" prepares a prompt (without your contact details) and reads the answer back. Free, on any plan.
+  - *Assistant:* chat in the app with your own key for any OpenAI-compatible service (OpenAI, DeepSeek…). Keys live in Windows Credential Manager.
+  - *MCP connector:* `bolzano-jobs --mcp` lets local AI tools (Claude Desktop, Cursor…) use the app; copy the details from Settings. ChatGPT can't reach apps on your computer without a public tunnel.
+- **Prepare application:** one review screen for any draft. **Nothing is ever sent for you:** AI can rank, save and draft; you read it, send it from your own email or the employer's site, then mark it applied.
 - **One feed:** jobs from Karriere Südtirol and NOI Techpark, merged and deduplicated. New ones are marked; delisted jobs you track stay visible.
 - **Fit check:**
   - Every posting is scanned for ~40 technologies and scored against your skills, with generic terms like "database" weighted lower.

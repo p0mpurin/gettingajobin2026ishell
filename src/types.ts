@@ -44,9 +44,49 @@ export interface Track {
   contact: string;
   cv: string;
   sent_message: string;
+  /** "field" | "senior" | "far" | "company" | "other": why "Not for me" was chosen. */
+  hide_reason?: string;
+  /** A draft waiting for review. Nothing here has been sent. */
+  draft_subject?: string;
+  draft_message?: string;
+  draft_to?: string;
+  draft_cv?: string;
+}
+
+export interface LanguageLevel {
+  lang: string;
+  level: string;
+}
+
+export interface Person {
+  name: string;
+  email: string;
+  phone: string;
+  links: string;
+  /** "student" | "junior" | "mid" | "senior", or empty. */
+  level: string;
+  roles: string[];
+  /** Ids from lib/fields.ts. */
+  fields: string[];
+  job_types: string[];
+  languages: LanguageLevel[];
+  /** Longest acceptable trip in minutes (0 = don't mind). */
+  max_commute: number;
+  background: string;
+}
+
+export interface AiRank {
+  score: number;
+  reason: string;
+  at: number;
 }
 
 export interface Settings {
+  onboarded: boolean;
+  person: Person;
+  ai_base_url: string;
+  ai_model: string;
+  ai_consent: boolean;
   terms: string[];
   districts: number[];
   include_noi: boolean;
@@ -78,7 +118,7 @@ export interface SavedView {
   query: string;
 }
 
-export type View = "jobs" | "pipeline" | "insights" | "settings";
+export type View = "jobs" | "assistant" | "pipeline" | "insights" | "settings";
 
 export const DISTRICTS: [number, string][] = [
   [43, "Bozen & Umgebung"],

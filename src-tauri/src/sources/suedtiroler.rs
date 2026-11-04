@@ -72,7 +72,11 @@ pub async fn fetch(client: &reqwest::Client, settings: &Settings) -> Result<Vec<
     if regions.is_empty() {
         return Ok(Vec::new());
     }
-    let terms: Vec<String> = settings.terms.iter().map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect();
+    let mut terms: Vec<String> = settings.terms.iter().map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect();
+    // No terms means every job, for people who haven't narrowed it down.
+    if terms.is_empty() {
+        terms.push(String::new());
+    }
     let results: Vec<Result<Vec<Offer>, String>> = stream::iter(terms)
         .map(|term| {
             let client = client.clone();
