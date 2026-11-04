@@ -1,0 +1,173 @@
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono";
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter Variable", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+
+  /* OLED surfaces: true black base, barely lifted layers. */
+  --color-void: #000000;
+  --color-base: #050505;
+  --color-raised: #0b0b0c;
+  --color-elevated: #121214;
+  --color-hover: #17171a;
+  --color-line: rgb(255 255 255 / 0.07);
+  --color-line-strong: rgb(255 255 255 / 0.13);
+
+  /* Chrome metal tones. */
+  --color-chrome-50: #fafafa;
+  --color-chrome-100: #ececef;
+  --color-chrome-200: #d4d4d8;
+  --color-chrome-300: #b4b4bb;
+  --color-chrome-400: #8d8d96;
+  --color-chrome-500: #6a6a73;
+  --color-chrome-600: #4a4a52;
+
+  /* Signal colours, kept muted against black. */
+  --color-mint: #7ebea5;
+  --color-sky: #7fb2e5;
+  --color-amber: #e3b26b;
+  --color-violet: #a99cf0;
+  --color-rose: #e58a8a;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  background: var(--color-void);
+}
+
+body {
+  margin: 0;
+  color: var(--color-chrome-100);
+  font-family: var(--font-sans);
+  font-feature-settings: "cv11", "ss01", "ss03";
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  overflow: hidden;
+}
+
+input,
+textarea,
+select,
+.selectable {
+  user-select: text;
+}
+
+/* Polished-metal text. */
+.chrome-text {
+  background: linear-gradient(180deg, #ffffff 0%, #d9d9de 38%, #8e8e97 62%, #e9e9ee 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+/* 1px brushed-chrome border drawn with a masked gradient. */
+.chrome-border {
+  position: relative;
+}
+.chrome-border::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  padding: 1px;
+  background: linear-gradient(160deg, rgb(255 255 255 / 0.32), rgb(255 255 255 / 0.04) 40%, rgb(255 255 255 / 0.02) 60%, rgb(255 255 255 / 0.22));
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  pointer-events: none;
+}
+
+/* Chrome button face. */
+.chrome-face {
+  background: linear-gradient(180deg, #f4f4f6 0%, #c9c9cf 48%, #a4a4ad 52%, #dedee3 100%);
+  color: #0a0a0b;
+  box-shadow:
+    inset 0 1px 0 rgb(255 255 255 / 0.9),
+    inset 0 -1px 0 rgb(0 0 0 / 0.25),
+    0 1px 12px rgb(255 255 255 / 0.06);
+}
+.chrome-face:hover {
+  background: linear-gradient(180deg, #ffffff 0%, #d6d6db 48%, #b2b2ba 52%, #ebebef 100%);
+}
+
+/* Soft top sheen for panels. */
+.sheen {
+  background-image: linear-gradient(180deg, rgb(255 255 255 / 0.035), transparent 120px);
+}
+
+.glow-mint {
+  box-shadow: 0 0 0 1px rgb(126 190 165 / 0.35), 0 0 24px -6px rgb(126 190 165 / 0.45);
+}
+
+/* Thin, quiet scrollbars. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(255 255 255 / 0.08);
+  border: 3px solid transparent;
+  background-clip: content-box;
+  border-radius: 999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgb(255 255 255 / 0.18);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::selection {
+  background: rgb(255 255 255 / 0.18);
+}
+
+:focus-visible {
+  outline: 1px solid rgb(255 255 255 / 0.45);
+  outline-offset: 2px;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.animate-rise {
+  animation: rise 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes shimmer {
+  from {
+    background-position: -400px 0;
+  }
+  to {
+    background-position: 400px 0;
+  }
+}
+.skeleton {
+  background: linear-gradient(90deg, rgb(255 255 255 / 0.03), rgb(255 255 255 / 0.08), rgb(255 255 255 / 0.03));
+  background-size: 800px 100%;
+  animation: shimmer 1.4s linear infinite;
+  border-radius: 6px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-rise,
+  .skeleton {
+    animation: none;
+  }
+}
