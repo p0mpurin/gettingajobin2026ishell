@@ -12,7 +12,8 @@ import { isFollowUpDue, snoozeUntil } from "./lib/followup";
 import { formatWhen } from "./lib/ics";
 import { hiddenBy } from "./lib/rules";
 import { weeklyStats } from "./lib/weekly";
-import { learnSignals, scoreJob, type Fit } from "./lib/foryou";
+import { isEveryday, learnSignals, mixFeed, scoreJob, type Fit } from "./lib/foryou";
+import { setLanguage } from "./lib/i18n";
 import type { SavedView } from "./types";
 import { TitleBar } from "./components/TitleBar";
 import { Sidebar } from "./components/Sidebar";
@@ -25,7 +26,12 @@ import { Kbd, Modal, ToastProvider, useToast } from "./components/ui";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { Setup } from "./components/Setup";
 import { AssistantView, type ChatLine } from "./components/AssistantView";
-import { ApplyModal, GptRankModal } from "./components/ApplyModals";
+import { ApplyModal, GptRankModal, TailorModal } from "./components/ApplyModals";
+import { AutopilotView } from "./components/AutopilotView";
+import { EasyApply } from "./components/EasyApply";
+import { MapView } from "./components/MapView";
+import { CommandBar, type Command } from "./components/CommandBar";
+import { CompanyPage } from "./components/CompanyPage";
 
 export default function App() {
   return (
@@ -39,6 +45,9 @@ const TRACKED = new Set(["applied", "interview", "offer", "rejected"]);
 /** Below this a job isn't a real match, just the baseline with no signal. */
 const FOR_YOU_MIN = 30;
 const FOR_YOU_MAX = 150;
+const MORNING_MIN_FIT = 50;
+const MAIL_FIRST_CHECK = 15_000;
+const MAIL_INTERVAL = 30 * 60_000;
 
 function Shell() {
   const toast = useToast();
@@ -52,7 +61,7 @@ function Shell() {
       return next;
     });
   const [descriptions, setDescriptions] = useState<Record<string, string>>({});
-  const [view, setView] = usePersisted<View>("view", "jobs", ["jobs", "assistant", "pipeline", "insights", "settings"]);
+  const [view, setView] = usePersisted<View>("view", "jobs", ["jobs", "map", "autopilot", "assistant", "pipeline", "insights", "settings"]);
   const [selectedId, setSelectedId] = useState<string | null>(() => {
     try {
       return localStorage.getItem("bolzano-jobs.selected");
@@ -68,7 +77,7 @@ function Shell() {
     }
   }, [selectedId]);
   const [tab, setTab] = useState<DetailTab>("overview");
-  const [filter, setFilter] = usePersisted<Filter>("filter", "foryou", ["foryou", "all", "new", "junior", "saved", "tracked", "watched"]);
+  const [filter, setFilter] = usePersisted<Filter>("filter", "foryou", ["foryou", "all", "new", "junior", "everyday", "saved", "tracked", "watched"]);
   const [sort, setSort] = usePersisted<Sort>("sort", "match", ["match", "newest", "company"]);
   const [source, setSource] = usePersisted<SourceFilter>("source", "all", ["all", "karriere-suedtirol", "noi-techpark", "suedtirolerjobs", "onboard"]);
   const [german, setGerman] = usePersisted<"any" | "ok">("german", "any", ["any", "ok"]);
@@ -78,6 +87,10 @@ function Shell() {
   const [setupOpen, setSetupOpen] = useState(false);
   const [askGpt, setAskGpt] = useState(false);
   const [preparing, setPreparing] = useState<string | null>(null);
+  const [applying, setApplying] = useState<string[] | null>(null);
+  const [tailoring, setTailoring] = useState<string | null>(null);
+  const [commandBar, setCommandBar] = useState(false);
+  const [company, setCompany] = useState<string | null>(null);
   const [chat, setChat] = useState<{ lines: ChatLine[]; history: unknown[] }>({ lines: [], history: [] });
   const [aiKind, setAiKind] = useState<string | null>(null);
   const [checking, setChecking] = useState<{ done: number; total: number } | null>(null);
@@ -174,12 +187,31 @@ function Shell() {
       const n = await api.applyAiInbox().catch(() => 0);
       if (n > 0) {
         reloadAiData();
-        toast(`Your AI tool added ${n} update${n === 1 ? "" : "s"}`, "info");
+        toast(`Your AI reported ${n} update${n === 1 ? "" : "s"}`, "info");
       }
     }, 5000);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Looks for replies quietly: no window, and only an in-app note when something changed.
+  const mailOn = settings?.mail_enabled ?? false;
+  useEffect(() => {
+    if (!mailOn) return;
+    const check = async () => {
+      const r = await api.mailSync().catch(() => null);
+      if (!r || (!r.updates.length && !r.suggestions)) return;
+      api.getTracks().then(setTracks);
+      if (r.updates.length) toast(`${r.updates.length} application${r.updates.length === 1 ? "" : "s"} updated from your email`, "info");
+    };
+    const first = setTimeout(check, MAIL_FIRST_CHECK);
+    const every = setInterval(check, MAIL_INTERVAL);
+    return () => {
+      clearTimeout(first);
+      clearInterval(every);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mailOn]);
 
   function reloadAiData() {
     api.getTracks().then(setTracks);
@@ -191,6 +223,7 @@ function Shell() {
 
   async function notify(fresh: Job[], fromWatched: Job[] = []) {
     if (!settings?.notify_new) return;
+    if (settings.do_not_disturb && (await api.gameRunning().catch(() => false))) return;
     let ok = await isPermissionGranted();
     if (!ok) ok = (await requestPermission()) === "granted";
     if (!ok) return;
@@ -305,7 +338,7 @@ function Shell() {
     const out: Record<string, Fit> = {};
     if (!settings) return out;
     for (const j of allJobs) {
-      out[j.id] = scoreJob(j, { person: settings.person, skills: settings.skills, analysis: analyses[j.id], commute: commutes[j.location], signals, aiRank: aiRanks[j.id] });
+      out[j.id] = scoreJob(j, { person: settings.person, skills: settings.skills, analysis: analyses[j.id], commute: commutes[j.location], signals, aiRank: aiRanks[j.id], everyday: settings.everyday_jobs });
     }
     return out;
   }, [allJobs, settings, analyses, commutes, signals, aiRanks]);
@@ -316,6 +349,7 @@ function Shell() {
     (j: Job, f: Filter) => {
       const st = tracks[j.id]?.status;
       if (f === "foryou") return !j.delisted && (!st || st === "saved") && (fitsRef.current[j.id]?.score ?? 0) >= FOR_YOU_MIN;
+      if (f === "everyday") return !j.delisted && isEveryday(j.title);
       if (f === "new") return j.is_new;
       if (f === "junior") return j.junior;
       if (f === "saved") return st === "saved";
@@ -472,7 +506,8 @@ function Shell() {
     const list = base.filter((j) => matchesFilter(j, filter) && (hiddenOk || tracks[j.id]?.status !== "hidden"));
     if (filter === "foryou") {
       const s = (j: Job) => sortScores[j.id] ?? fits[j.id]?.score ?? 0;
-      return list.sort((a, b) => s(b) - s(a)).slice(0, FOR_YOU_MAX);
+      const ranked = list.sort((a, b) => s(b) - s(a));
+      return (settings?.everyday_jobs ? mixFeed(ranked, (j) => isEveryday(j.title)) : ranked).slice(0, FOR_YOU_MAX);
     }
     const score = (j: Job) => sortScores[j.id] ?? (j.junior ? 40 : -1);
     const date = (j: Job) => j.published ?? new Date(j.first_seen * 1000).toISOString();
@@ -484,11 +519,11 @@ function Shell() {
           : score(b) - score(a) || date(b).localeCompare(date(a)),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [base, filter, sort, matchesFilter, sortScores, tracks]);
+  }, [base, filter, sort, matchesFilter, sortScores, tracks, settings?.everyday_jobs]);
 
   const counts = useMemo(() => {
     const c = {} as Record<Filter, number>;
-    for (const f of ["foryou", "all", "new", "junior", "saved", "tracked", "watched"] as Filter[]) {
+    for (const f of ["foryou", "all", "new", "junior", "everyday", "saved", "tracked", "watched"] as Filter[]) {
       c[f] = base.filter((j) => matchesFilter(j, f) && (f === "saved" || f === "tracked" || tracks[j.id]?.status !== "hidden")).length;
     }
     return c;
@@ -524,6 +559,13 @@ function Shell() {
     draft_message: prev?.draft_message ?? "",
     draft_to: prev?.draft_to ?? "",
     draft_cv: prev?.draft_cv ?? "",
+    queued: prev?.queued ?? false,
+    needs_you: prev?.needs_you ?? "",
+    applied_by: prev?.applied_by ?? "",
+    tailored_cv: prev?.tailored_cv ?? "",
+    tailored_language: prev?.tailored_language ?? "",
+    mails: prev?.mails ?? [],
+    morning_day: prev?.morning_day ?? "",
   });
 
   async function patchTrack(id: string, patch: Partial<Track>, message: string) {
@@ -678,11 +720,113 @@ function Shell() {
 
   async function saveSettings(s: Settings) {
     await api.saveSettings(s);
-    const searchChanged = JSON.stringify([s.terms, s.districts, s.include_noi, s.include_suedtiroler, s.onboard_companies, s.onboard_local_only]) !==
-      JSON.stringify([settings?.terms, settings?.districts, settings?.include_noi, settings?.include_suedtiroler, settings?.onboard_companies, settings?.onboard_local_only]);
+    const searchChanged = JSON.stringify([s.terms, s.districts, s.include_noi, s.include_suedtiroler, s.onboard_companies, s.onboard_local_only, s.everyday_jobs]) !==
+      JSON.stringify([settings?.terms, settings?.districts, settings?.include_noi, settings?.include_suedtiroler, settings?.onboard_companies, settings?.onboard_local_only, settings?.everyday_jobs]);
     setSettings(s);
     if (searchChanged) refresh();
   }
+
+  /** Whether an AI is ready, sending the user to connect one if not. */
+  async function aiReady() {
+    const signedIn = settings?.ai_provider === "claude" || settings?.ai_provider === "codex";
+    const connected = settings?.ai_consent && (signedIn || (await api.aiHasKey().catch(() => false)));
+    if (!connected) {
+      setView("assistant");
+      toast("Connect an AI first", "info");
+    }
+    return !!connected;
+  }
+
+  /** Starts the live webview. */
+  async function easyApply(ids: string[]) {
+    if (await aiReady()) setApplying(ids);
+  }
+
+  async function tailorCv(id: string) {
+    if (await aiReady()) setTailoring(id);
+  }
+
+  /* Morning queue */
+  const today = new Date().toISOString().slice(0, 10);
+  const morning = useMemo(() => Object.entries(tracks).filter(([, t]) => t.morning_day === today && !t.queued && !t.applied && t.status !== "hidden").map(([id]) => jobsById[id]).filter(Boolean), [tracks, jobsById, today]);
+
+  // The day's picks, once a day, the first time the app is open after 5am.
+  const scoresReady = Object.keys(descriptions).length > 0 && jobs.length > 0;
+  useEffect(() => {
+    if (!settings?.morning_queue || !scoresReady || setupOpen || new Date().getHours() < 5) return;
+    const key = "bolzano-jobs.morning-day";
+    try {
+      if (localStorage.getItem(key) === today) return;
+    } catch {
+      return;
+    }
+    const picks = jobs
+      .filter((j) => !tracksRef.current[j.id] && (fitsRef.current[j.id]?.score ?? 0) >= MORNING_MIN_FIT)
+      .sort((a, b) => Number(b.is_new) - Number(a.is_new) || (fitsRef.current[b.id]?.score ?? 0) - (fitsRef.current[a.id]?.score ?? 0))
+      .slice(0, settings.morning_count);
+    // Scores improve as postings are read: keep looking until something qualifies.
+    if (!picks.length) return;
+    localStorage.setItem(key, today);
+    (async () => {
+      for (const j of picks) await updateTrack(j, { morning_day: today });
+      if (settings.ai_tailor_cv && settings.ai_consent) {
+        // One at a time, and never during a game.
+        for (const j of picks) {
+          if (settings.do_not_disturb && (await api.gameRunning().catch(() => false))) break;
+          await api.tailorCv(j.id).catch(() => {});
+        }
+        api.getTracks().then(setTracks);
+      }
+      if (picks.length) toast(`Morning queue: ${picks.length} ready`, "info");
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settings?.morning_queue, scoresReady, setupOpen, today, fits]);
+
+  async function approveMorning() {
+    const list = morning;
+    for (const j of list) await updateTrack(j, { queued: true, morning_day: "" });
+    await easyApply(list.map((j) => j.id));
+  }
+
+  const openJob = (id: string) => {
+    setSelectedId(id);
+    setCompany(null);
+    if (tracks[id]?.status === "hidden" || jobsById[id]?.delisted) setFilter("tracked");
+    else if (filter === "foryou" && !visible.some((j) => j.id === id)) setFilter("all");
+    setView("jobs");
+  };
+
+  const commands: Command[] = [
+    { id: "foryou", label: "Go to For You", run: () => (setFilter("foryou"), setView("jobs")) },
+    { id: "jobs", label: "Go to Jobs", run: () => openView("jobs") },
+    { id: "everyday", label: "Show everyday jobs", hint: "reception, help desk, office", run: () => (setFilter("everyday"), setView("jobs")) },
+    { id: "map", label: "Open the job map", run: () => setView("map") },
+    { id: "autopilot", label: "Open Autopilot", run: () => setView("autopilot") },
+    { id: "assistant", label: "Open the Assistant", run: () => setView("assistant") },
+    { id: "pipeline", label: "Open Pipeline", run: () => setView("pipeline") },
+    { id: "insights", label: "Open Insights", run: () => setView("insights") },
+    { id: "settings", label: "Open Settings", run: () => setView("settings") },
+    { id: "refresh", label: "Refresh jobs", run: () => refresh() },
+    { id: "setup", label: "Run setup again", run: () => setSetupOpen(true) },
+    { id: "shortcuts", label: "Show keyboard shortcuts", run: () => setShortcuts(true) },
+    ...(settings
+      ? [
+          { id: "dnd", label: `${settings.do_not_disturb ? "Turn off" : "Turn on"} Do Not Disturb`, run: () => updateSettings({ ...settings, do_not_disturb: !settings.do_not_disturb }) },
+          { id: "morning", label: `${settings.morning_queue ? "Turn off" : "Turn on"} the morning queue`, run: () => updateSettings({ ...settings, morning_queue: !settings.morning_queue }) },
+          ...(settings.mail_enabled ? [{ id: "mail", label: "Check my email for replies", run: () => api.mailSync().then(() => api.getTracks().then(setTracks)) }] : []),
+        ]
+      : []),
+    ...(selected
+      ? [
+          { id: "apply", label: "Easy Apply to this job", hint: selected.title, run: () => easyApply([selected.id]) },
+          { id: "posting", label: "Open this posting", hint: selected.title, run: () => openUrl(selected.url) },
+          { id: "tailor", label: "Tailor a CV for this job", hint: selected.title, run: () => tailorCv(selected.id) },
+          { id: "save", label: "Save this job", hint: selected.title, run: () => setStatus(selected, "saved") },
+          { id: "queue", label: "Add this job to Autopilot", hint: selected.title, run: () => updateTrack(selected, { queued: true }) },
+          ...(selected.company ? [{ id: "company", label: "Open this company", hint: selected.company, run: () => setCompany(selected.company) }] : []),
+        ]
+      : []),
+  ];
 
   /** Jobs and For You share a view; choosing Jobs leaves the feed. */
   function openView(v: View) {
@@ -694,7 +838,7 @@ function Shell() {
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (!settings?.onboarded || setupOpen) return;
+      if (!settings?.onboarded || setupOpen || applying) return;
       const typing = (e.target as HTMLElement).closest("input, textarea, select");
       if (e.key === "Escape") {
         if (shortcuts) setShortcuts(false);
@@ -709,8 +853,7 @@ function Shell() {
       }
       if (e.ctrlKey && e.key.toLowerCase() === "k") {
         e.preventDefault();
-        setView("jobs");
-        searchRef.current?.focus();
+        setCommandBar((open) => !open);
         return;
       }
       if (typing || e.ctrlKey || e.altKey || e.metaKey) return;
@@ -759,6 +902,7 @@ function Shell() {
     ? `Auto-refresh every ${settings.auto_refresh_minutes < 60 ? `${settings.auto_refresh_minutes} min` : `${settings.auto_refresh_minutes / 60} h`}${settings.notify_new ? " with notifications" : ""}.`
     : "Auto-refresh is off.";
 
+  if (settings) setLanguage(settings.ui_language);
   if (!settings) return <div className="h-full bg-void" />;
   if (!settings.onboarded || setupOpen) {
     return (
@@ -780,7 +924,7 @@ function Shell() {
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="relative flex h-full flex-col">
       <TitleBar query={query} onQuery={(q) => (setQuery(q), setView("jobs"))} searchRef={searchRef} loading={loading} onRefresh={() => refresh()} status={status} />
       {errors.length > 0 && (
         <div className="flex items-center gap-2 border-b border-rose/20 bg-rose/5 px-4 py-1.5 text-[12px] text-rose">
@@ -797,6 +941,7 @@ function Shell() {
           onView={openView}
           forYou={view === "jobs" && filter === "foryou"}
           forYouCount={Math.min(counts.foryou, FOR_YOU_MAX)}
+          needsYou={Object.values(tracks).filter((t) => t.needs_you).length}
           onForYou={() => {
             setFilter("foryou");
             setView("jobs");
@@ -854,6 +999,9 @@ function Shell() {
               onNotForMe={notForMe}
               onAskGpt={() => setAskGpt(true)}
               onRunSetup={() => setSetupOpen(true)}
+              morning={morning}
+              onApproveMorning={approveMorning}
+              onSkipMorning={(j) => updateTrack(j, { morning_day: "" })}
             />
             {selected && settings ? (
               <JobDetail
@@ -876,6 +1024,9 @@ function Shell() {
                 commute={commutes[selected.location]}
                 fit={fits[selected.id]}
                 onPrepare={() => setPreparing(selected.id)}
+                onEasyApply={() => easyApply([selected.id])}
+                onTailor={() => tailorCv(selected.id)}
+                onCompany={() => setCompany(selected.company)}
               />
             ) : (
               <div className="flex flex-1 flex-col items-center justify-center gap-2 bg-void text-chrome-500">
@@ -884,6 +1035,10 @@ function Shell() {
               </div>
             )}
           </>
+        )}
+        {view === "map" && <MapView jobs={base.filter((j) => !j.delisted && tracks[j.id]?.status !== "hidden")} commutes={commutes} fits={fits} homeTown={settings.home_town} onOpen={openJob} />}
+        {view === "autopilot" && (
+          <AutopilotView settings={settings} tracks={tracks} jobs={jobs} jobsById={jobsById} fits={fits} postings={descriptions} onSaveSettings={saveSettings} onUpdate={updateTrack} onChanged={reloadAiData} onRunHere={easyApply} />
         )}
         {view === "assistant" && <AssistantView settings={settings} onSaveSettings={saveSettings} onChanged={reloadAiData} chat={chat} setChat={setChat} />}
         {view === "pipeline" && (
@@ -917,6 +1072,27 @@ function Shell() {
         )}
         </ErrorBoundary>
       </div>
+      {applying && (
+        <EasyApply ids={applying} jobsById={jobsById} tracks={tracks} settings={settings} onSaveSettings={saveSettings} onUpdate={updateTrack} onChanged={reloadAiData} onClose={() => setApplying(null)} />
+      )}
+      {commandBar && <CommandBar commands={commands} jobs={allJobs} onJob={openJob} onCompany={setCompany} onClose={() => setCommandBar(false)} />}
+      {company && (
+        <CompanyPage
+          name={company}
+          jobs={allJobs}
+          tracks={tracks}
+          fits={fits}
+          watched={isWatched(company)}
+          onToggleWatch={() => toggleWatch(company)}
+          onHide={() => {
+            hideCompany(company);
+            setCompany(null);
+          }}
+          onOpen={openJob}
+          onClose={() => setCompany(null)}
+        />
+      )}
+      {tailoring && jobsById[tailoring] && <TailorModal job={jobsById[tailoring]} onDone={reloadAiData} onClose={() => setTailoring(null)} />}
       {shortcuts && <ShortcutsModal onClose={() => setShortcuts(false)} />}
       {askGpt && (
         <GptRankModal
@@ -954,6 +1130,7 @@ const SHORTCUTS: [string[], string][] = [
   [["O"], "Overview tab"],
   [["P"], "AI email tab"],
   [["N"], "Notes tab"],
+  [["Ctrl", "K"], "Command bar"],
   [["/"], "Search"],
   [["R"], "Refresh"],
   [["Ctrl", "1–4"], "Switch view"],

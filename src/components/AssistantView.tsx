@@ -1,12 +1,16 @@
 import { useEffect, useRef, useState } from "react";
+import { openUrl } from "@tauri-apps/plugin-opener";
 import { Bot, KeyRound, Send, ShieldCheck, Sparkles, Trash2, Wrench } from "lucide-react";
 import type { Settings } from "../types";
 import { api } from "../lib/api";
 import { Button, Panel } from "./ui";
+import { AiConnect } from "./AiConnect";
 
-export const AI_SERVICES: [string, string, string][] = [
-  ["OpenAI (GPT)", "https://api.openai.com/v1", "gpt-4o-mini"],
-  ["DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat"],
+/** Name, address, default model and where to get a key. */
+export const AI_SERVICES: [string, string, string, string][] = [
+  ["ChatGPT (OpenAI)", "https://api.openai.com/v1", "gpt-4o-mini", "https://platform.openai.com/api-keys"],
+  ["Claude (Anthropic)", "https://api.anthropic.com/v1", "claude-sonnet-5-5", "https://console.anthropic.com/settings/keys"],
+  ["DeepSeek", "https://api.deepseek.com/v1", "deepseek-chat", "https://platform.deepseek.com/api_keys"],
 ];
 
 const inputClass = "chrome-border h-9 w-full rounded-lg bg-void px-3 text-[13px] text-chrome-100 outline-none placeholder:text-chrome-600";
@@ -29,15 +33,17 @@ export function AiServiceForm({
   onModel: (v: string) => void;
   onKey: (v: string) => void;
 }) {
+  const [keysUrl, setKeysUrl] = useState(AI_SERVICES.find(([, url]) => url === base)?.[3] ?? "");
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap gap-1.5">
-        {AI_SERVICES.map(([name, url, m]) => (
+        {AI_SERVICES.map(([name, url, m, keys]) => (
           <button
             key={name}
             onClick={() => {
               onBase(url);
               onModel(m);
+              setKeysUrl(keys);
             }}
             className={`h-7 rounded-full px-3 text-[12px] font-medium transition ${base === url ? "chrome-face" : "border border-line-strong text-chrome-400 hover:text-chrome-50"}`}
           >
@@ -56,7 +62,14 @@ export function AiServiceForm({
         </label>
       </div>
       <label className="block text-[12px] text-chrome-500">
-        API key
+        <span className="flex items-center">
+          API key
+          {keysUrl && (
+            <button type="button" onClick={() => openUrl(keysUrl)} className="ml-auto text-chrome-300 transition hover:text-chrome-50">
+              Get a key ↗
+            </button>
+          )}
+        </span>
         <input type="password" autoComplete="off" value={apiKey} onChange={(e) => onKey(e.target.value)} placeholder={hasKey ? "Saved. Type a new one to replace it" : "Paste your key"} className={`${inputClass} mt-1`} />
         <span className="mt-1 block text-[11.5px] text-chrome-600">Kept in Windows Credential Manager, never in the app's data files or backups.</span>
       </label>
@@ -112,7 +125,7 @@ export function AssistantView({
 
   async function connect() {
     if (apiKey.trim()) await api.aiSetKey(apiKey);
-    await onSaveSettings({ ...settings, ai_base_url: base.trim(), ai_model: model.trim(), ai_consent: true });
+    await onSaveSettings({ ...settings, ai_provider: "key", ai_base_url: base.trim(), ai_model: model.trim(), ai_consent: true });
     setApiKey("");
     setHasKey(true);
   }
@@ -139,7 +152,8 @@ export function AssistantView({
 
   if (hasKey === null) return <div className="flex-1 bg-void" />;
 
-  if (!hasKey || !settings.ai_consent) {
+  const signedIn = settings.ai_provider === "claude" || settings.ai_provider === "codex";
+  if (!settings.ai_consent || (!signedIn && !hasKey)) {
     const canSave = (hasKey || apiKey.trim().length > 0) && base.trim().length > 0 && model.trim().length > 0;
     return (
       <div className="min-w-0 flex-1 overflow-y-auto bg-void">
@@ -148,20 +162,26 @@ export function AssistantView({
             <Bot size={20} />
           </div>
           <h1 className="chrome-text mt-4 text-[26px] font-semibold tracking-tight">Your job-search assistant</h1>
-          <p className="mt-2 text-[13.5px] leading-relaxed text-chrome-400">Ask it to find jobs, rank your feed and write applications. It uses your own API key, so you pay the AI service directly, by use. ChatGPT Plus doesn't include API use.</p>
-          <Panel className="mt-6 p-5">
-            <AiServiceForm base={base} model={model} apiKey={apiKey} hasKey={!!hasKey} onBase={setBase} onModel={setModel} onKey={setApiKey} />
-          </Panel>
-          <div className="mt-4 flex gap-3 rounded-xl border border-line bg-white/[0.015] p-4 text-[12.5px] leading-relaxed text-chrome-400">
-            <ShieldCheck size={16} className="mt-0.5 shrink-0 text-mint" />
-            <div>
-              <span className="font-medium text-chrome-100">What gets shared with {hostOf(base)}: </span>
-              your messages here and, when it needs them, your profile (including name, email, phone and CV text), job listings and your applications. Their privacy terms apply. It can save jobs and write drafts, but it can't send anything: you review and send every application yourself.
-            </div>
+          <p className="mt-2 text-[13.5px] leading-relaxed text-chrome-400">Sign in once, then ask it to find jobs and rank your feed. Easy Apply uses the same sign-in.</p>
+          <div className="mt-6">
+            <AiConnect provider={settings.ai_provider} consented={settings.ai_consent} onConnect={(p) => onSaveSettings({ ...settings, ai_provider: p, ai_consent: true })} />
           </div>
-          <Button variant="chrome" className="mt-4" disabled={!canSave} icon={<KeyRound size={14} />} onClick={connect}>
-            I understand, connect
-          </Button>
+          <details className="mt-5">
+            <summary className="cursor-pointer text-[12.5px] text-chrome-500 transition hover:text-chrome-200">Use an API key instead</summary>
+            <Panel className="mt-3 p-5">
+              <AiServiceForm base={base} model={model} apiKey={apiKey} hasKey={!!hasKey} onBase={setBase} onModel={setModel} onKey={setApiKey} />
+            </Panel>
+            <div className="mt-3 flex gap-3 rounded-xl border border-line bg-white/[0.015] p-4 text-[12.5px] leading-relaxed text-chrome-400">
+              <ShieldCheck size={16} className="mt-0.5 shrink-0 text-mint" />
+              <div>
+                <span className="font-medium text-chrome-100">What gets shared with {hostOf(base)}: </span>
+                your messages and, when needed, your profile (including name, email, phone and CV text), job listings and page contents. Their privacy terms apply, and you pay them by use.
+              </div>
+            </div>
+            <Button className="mt-3" disabled={!canSave} icon={<KeyRound size={14} />} onClick={connect}>
+              I understand, connect
+            </Button>
+          </details>
         </div>
       </div>
     );
@@ -173,7 +193,7 @@ export function AssistantView({
         <div>
           <h1 className="chrome-text text-[20px] font-semibold tracking-tight">Assistant</h1>
           <p className="mt-0.5 text-[12px] text-chrome-500">
-            {settings.ai_model} on {hostOf(settings.ai_base_url)}. Drafts wait for your review; nothing is sent for you.
+            {settings.ai_provider === "claude" ? "Signed in with Claude" : settings.ai_provider === "codex" ? "Signed in with ChatGPT" : `${settings.ai_model} on ${hostOf(settings.ai_base_url)}`}. It can rank, save and draft here; applying happens in Easy Apply.
           </p>
         </div>
         {chat.lines.length > 0 && (

@@ -5,7 +5,11 @@ import { companyKey, mergeDuplicates, titleKey } from "./dedupe.ts";
 import { followUpDue, isFollowUpDue } from "./followup.ts";
 import { analyze, germanNeed, germanOk } from "./match.ts";
 import { buildProfileText, EMPTY_PERSON, levelRank, parseCv, searchTerms } from "./profile.ts";
-import { learnSignals, scoreJob } from "./foryou.ts";
+import { isEveryday, learnSignals, mixFeed, scoreJob } from "./foryou.ts";
+import { townOf, project, OUTLINE, TOWNS } from "./towns.ts";
+import { percent, replyStats } from "./analytics.ts";
+import { missingKeys, setLanguage, t } from "./i18n.ts";
+import { applicationsLeft, buildBrief, parseReports } from "./autopilot.ts";
 import { buildRankPrompt, findApplyEmail, mailtoLink, parseRankReply } from "./gpt.ts";
 import type { Job, Track } from "../types.ts";
 
@@ -270,4 +274,108 @@ test("application helpers", () => {
   assert.ok(short.fits && short.url.includes("body=Body") && short.url.startsWith("mailto:a@b.it?"));
   const long = mailtoLink("a@b.it", "Hi", "x".repeat(3000));
   assert.ok(!long.fits && !long.url.includes("body="));
+});
+
+/* ---------- Autopilot ---------- */
+
+test("the brief carries rules, permissions, CVs and postings as data", () => {
+  const settings = {
+    profile: "Name: Ana", cvs: [{ label: "EN", language: "English", path: "C:\\cv.pdf" }], answers: [{ question: "Start?", answer: "May" }],
+    ai_can_submit: false, ai_accept_privacy: true,
+  } as never;
+  const brief = buildBrief("THE RULES", settings, [job({ id: "ks-1", title: "Koch", apply_url: "https://x.it/a" })], 7, { "ks-1": "Text" });
+  for (const part of ["THE RULES", "submit_allowed: false", "may_accept_privacy_notice: true", "applications_left_today: 7", "C:\\cv.pdf", "Q: Start?", "[ks-1] Koch", "https://x.it/a", "information only"]) {
+    assert.ok(brief.includes(part), part);
+  }
+});
+
+test("agent results parse, and only valid rows for queued jobs count", () => {
+  const rows = parseReports('Done:\n[{"id":"a","outcome":"submitted"},{"id":"b","outcome":"needs_you","note":"Captcha"},{"id":"c","outcome":"needs_you"},{"id":"zzz","outcome":"submitted"},{"id":"a","outcome":"launched"}]', new Set(["a", "b", "c"]));
+  assert.deepEqual(rows.map((r) => r.id), ["a", "b"]);
+  assert.throws(() => parseReports("nothing", new Set(["a"])), /No results/);
+  assert.throws(() => parseReports('[{"id":"zzz","outcome":"submitted"}]', new Set(["a"])), /None of those/);
+});
+
+test("only today's AI applications count against the limit", () => {
+  const now = new Date("2026-11-05T12:00:00Z");
+  const at = (d: string) => new Date(d).getTime() / 1000;
+  const list = [
+    { applied: at("2026-11-05T09:00:00Z"), applied_by: "ai" },
+    { applied: at("2026-11-04T09:00:00Z"), applied_by: "ai" },
+    { applied: at("2026-11-05T09:00:00Z"), applied_by: "" },
+    { applied: null, applied_by: "ai" },
+  ];
+  assert.equal(applicationsLeft(10, list, now), 9);
+  assert.equal(applicationsLeft(1, list, now), 0);
+});
+
+/* ---------- everyday jobs, map, analytics, language ---------- */
+
+test("everyday jobs are recognised in three languages", () => {
+  for (const title of ["Rezeptionist (m/w/d)", "Receptionist", "Addetto al ricevimento", "IT Support Specialist", "Helpdesk Mitarbeiter", "Mitarbeiter Kundenservice", "Verkäuferin", "Impiegata amministrativa", "Front Office Manager"]) assert.ok(isEveryday(title), title);
+  assert.ok(!isEveryday("Senior Software Architect"));
+  assert.ok(!isEveryday("Maschinenbau Ingenieur"));
+});
+
+test("everyday jobs reach For You without a matching profile, but not senior posts", () => {
+  const ctx = { person: person({ roles: ["Developer"], level: "junior" }), skills: [], signals: noSignals, everyday: true };
+  const desk = scoreJob(job({ title: "Help Desk Mitarbeiter" }), ctx);
+  assert.ok(desk.score >= 30, "enough to enter the feed");
+  assert.ok(desk.reasons.some((r) => /Everyday/.test(r)));
+  assert.ok(!scoreJob(job({ title: "Help Desk Teamleiter" }), ctx).reasons.some((r) => /Everyday/.test(r)));
+  assert.ok(scoreJob(job({ title: "Help Desk Mitarbeiter" }), { ...ctx, everyday: false }).score < desk.score, "the setting turns it off");
+});
+
+test("the feed keeps a place for everyday jobs", () => {
+  const dev = (n: number) => "dev" + n;
+  const sorted = [dev(1), dev(2), dev(3), dev(4), dev(5), dev(6), dev(7), "desk1", "desk2"];
+  const mixed = mixFeed(sorted, (x) => x.startsWith("desk"));
+  assert.equal(mixed.indexOf("desk1"), 3, "every 4th spot");
+  assert.equal(mixed.indexOf("desk2"), 7);
+  assert.equal(mixed.length, sorted.length, "nothing lost");
+  assert.deepEqual(mixFeed(["a", "b"], () => false), ["a", "b"]);
+  assert.equal(mixFeed(["desk", "dev"], (x) => x === "desk")[0], "desk", "already high stays high");
+});
+
+test("the map finds towns in both languages, on whole words", () => {
+  assert.equal(townOf("39100 Bolzano (BZ)")?.name, "Bozen");
+  assert.equal(townOf("Caldaro sulla Strada del Vino")?.name, "Kaltern");
+  assert.equal(townOf("Unterinn, Ritten")?.name, "Ritten");
+  assert.equal(townOf("Oradea"), undefined);
+  assert.equal(townOf(""), undefined);
+  for (const town of TOWNS) {
+    const [x, y] = project(town.lat, town.lon, 720);
+    assert.ok(x > 0 && x < 720 && y > 0, town.name);
+  }
+  assert.ok(OUTLINE.length > 10);
+});
+
+test("analytics counts replies by CV, message and kind of job", () => {
+  const s = replyStats([
+    tracked({ status: "interview", title: "Receptionist", cv: "EN", sent_message: "Hi", applied_by: "ai" }),
+    tracked({ status: "rejected", title: "Software Developer", cv: "EN", tailored_cv: "x.pdf", sent_message: "Hi" }),
+    tracked({ status: "applied", title: "Software Developer", cv: "DE" }),
+    tracked({ status: "applied", title: "Koch", mails: [{ kind: "received" } as never] }),
+    tracked({ status: "saved", title: "Not sent" }),
+  ]);
+  assert.equal(s.total, 4, "saved jobs don't count");
+  const by = (rows: { label: string }[], l: string) => rows.find((r) => r.label === l) as never as { sent: number; replies: number; interviews: number };
+  assert.deepEqual(by(s.byCv, "Tailored for the job"), { label: "Tailored for the job", sent: 1, replies: 1, interviews: 0 });
+  assert.equal(by(s.byCv, "DE").replies, 0);
+  assert.equal(by(s.byMessage, "Sent by AI").interviews, 1);
+  assert.equal(by(s.byJob, "Everyday jobs").sent, 1);
+  assert.equal(by(s.byJob, "Hotels & restaurants").replies, 0, "a confirmation isn't a reply");
+  assert.equal(percent(1, 4), 25);
+  assert.equal(percent(1, 0), 0);
+});
+
+test("translations cover both languages and fall back to English", () => {
+  assert.deepEqual(missingKeys(), []);
+  setLanguage("de");
+  assert.equal(t("For You"), "Für dich");
+  assert.equal(t("Not translated yet"), "Not translated yet");
+  setLanguage("it");
+  assert.equal(t("Open posting"), "Apri annuncio");
+  setLanguage("en");
+  assert.equal(t("For You"), "For You");
 });

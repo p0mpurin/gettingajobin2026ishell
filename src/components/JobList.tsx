@@ -1,14 +1,15 @@
 import { memo, useEffect, useRef } from "react";
 import { useState } from "react";
-import { ArrowDownWideNarrow, BellRing, BookmarkPlus, Bus, Copy, EyeOff, Inbox, Languages, PenLine, Sparkles, Star, ThumbsDown, TriangleAlert, X } from "lucide-react";
+import { ArrowDownWideNarrow, BellRing, BookmarkPlus, Bus, Copy, EyeOff, Hand, Inbox, Languages, PenLine, Rocket, Sparkles, Sunrise, Star, ThumbsDown, TriangleAlert, X } from "lucide-react";
 import type { Commute, Job, Track } from "../types";
 import { PIPELINE } from "../types";
 import type { Analysis, GermanNeed } from "../lib/match";
 import type { Fit } from "../lib/foryou";
 import { ageDays, shortDate, ago } from "../lib/format";
 import { Button, Chip, ScoreRing } from "./ui";
+import { t } from "../lib/i18n";
 
-export type Filter = "foryou" | "all" | "new" | "junior" | "saved" | "tracked" | "watched";
+export type Filter = "foryou" | "all" | "new" | "junior" | "everyday" | "saved" | "tracked" | "watched";
 export type Sort = "match" | "newest" | "company";
 export type SourceFilter = "all" | "karriere-suedtirol" | "noi-techpark" | "suedtirolerjobs" | "onboard";
 
@@ -24,6 +25,7 @@ const FILTERS: { id: Filter; label: string }[] = [
   { id: "all", label: "All" },
   { id: "new", label: "New" },
   { id: "junior", label: "Junior" },
+  { id: "everyday", label: "Everyday" },
   { id: "saved", label: "Saved" },
   { id: "tracked", label: "Applied+" },
   { id: "watched", label: "★" },
@@ -67,6 +69,9 @@ export function JobList({
   onNotForMe,
   onAskGpt,
   onRunSetup,
+  morning,
+  onApproveMorning,
+  onSkipMorning,
 }: {
   jobs: Job[];
   tracks: Record<string, Track>;
@@ -112,6 +117,10 @@ export function JobList({
   onNotForMe: (job: Job, reason: string) => void;
   onAskGpt: () => void;
   onRunSetup: () => void;
+  /** Today's prepared matches, waiting for approval. */
+  morning: Job[];
+  onApproveMorning: () => void;
+  onSkipMorning: (job: Job) => void;
 }) {
   const forYou = filter === "foryou";
   const [naming, setNaming] = useState(false);
@@ -129,12 +138,38 @@ export function JobList({
         {forYou && (
           <div className="flex items-center gap-3 px-1 pt-0.5">
             <div className="min-w-0">
-              <h2 className="chrome-text text-[20px] font-semibold leading-tight tracking-tight">For You</h2>
-              <p className="truncate text-[12px] text-chrome-500">{firstName ? `Ranked for ${firstName}` : "Ranked for you"} · best first</p>
+              <h2 className="chrome-text text-[20px] font-semibold leading-tight tracking-tight">{t("For You")}</h2>
+              <p className="truncate text-[12px] text-chrome-500">{firstName ? `${t("For You")}: ${firstName}` : t("Ranked for you")} · {t("best first")}</p>
             </div>
             <Button size="sm" className="ml-auto" icon={<Sparkles size={12} />} onClick={onAskGpt}>
-              Rank with ChatGPT
+              {t("Rank with ChatGPT")}
             </Button>
+          </div>
+        )}
+        {forYou && morning.length > 0 && (
+          <div className="chrome-border sheen animate-rise rounded-xl bg-raised p-3">
+            <div className="flex items-center gap-2 text-[12.5px]">
+              <Sunrise size={14} className="text-amber" />
+              <span className="font-semibold text-chrome-50">{t("Morning queue")}</span>
+              <span className="text-chrome-500">
+                {morning.length} {t("ready for you")}
+              </span>
+              <Button size="sm" variant="chrome" className="ml-auto" onClick={onApproveMorning}>
+                {t("Approve all")}
+              </Button>
+            </div>
+            <div className="mt-2 space-y-0.5">
+              {morning.map((j) => (
+                <div key={j.id} className="flex items-center gap-2 text-[12px]">
+                  <button onClick={() => onSelect(j.id)} className="min-w-0 flex-1 truncate text-left text-chrome-300 transition hover:text-chrome-50">
+                    {j.title} <span className="text-chrome-600">· {j.company}</span>
+                  </button>
+                  <button aria-label={`Skip ${j.title}`} onClick={() => onSkipMorning(j)} className="text-chrome-600 transition hover:text-chrome-100">
+                    <X size={12} />
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
         )}
         {forYou && needsSetup && (
@@ -200,7 +235,7 @@ export function JobList({
                 filter === f.id ? "chrome-face" : "text-chrome-400 hover:text-chrome-100"
               }`}
             >
-              {f.label}
+              {t(f.label)}
               <span className={`text-[10px] tabular-nums ${filter === f.id ? "text-black/55" : "text-chrome-600"}`}>{counts[f.id]}</span>
             </button>
           ))}
@@ -367,6 +402,16 @@ const Row = memo(function Row({
         </div>
         {fit && fit.reasons.length > 0 && <div className="mt-1 line-clamp-2 text-[12px] leading-snug text-chrome-200">{fit.reasons.slice(0, 2).join(" · ")}</div>}
         <div className="mt-1.5 flex flex-wrap items-center gap-1">
+          {track?.needs_you && (
+            <Chip tone="amber">
+              <Hand size={10} /> Needs you
+            </Chip>
+          )}
+          {track?.queued && (
+            <Chip tone="violet">
+              <Rocket size={10} /> Autopilot
+            </Chip>
+          )}
           {track?.draft_message && (
             <Chip tone="sky">
               <PenLine size={10} /> Draft ready

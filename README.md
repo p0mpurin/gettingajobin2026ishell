@@ -10,9 +10,19 @@ Built with Tauri v2, Rust and React, with an OLED-black, chrome-accented UI.
 - **For You:** your jobs ranked by role, field, skills, languages, experience, commute and freshness, with the reasons shown. It learns from what you save, apply to and mark "Not for me".
 - **AI, three ways:**
   - *Copy and paste:* "Rank with ChatGPT" prepares a prompt (without your contact details) and reads the answer back. Free, on any plan.
-  - *Assistant:* chat in the app with your own key for any OpenAI-compatible service (OpenAI, DeepSeek…). Keys live in Windows Credential Manager.
+  - *Sign in with Claude or ChatGPT:* uses your plan through their official apps, Claude Code and Codex, which handle the sign-in on the provider's own page. This app never sees the login, and each run gets only the form tools: no shell, no web, no plugins.
+  - *API key:* any OpenAI-compatible service, with keys in Windows Credential Manager.
   - *MCP connector:* `bolzano-jobs --mcp` lets local AI tools (Claude Desktop, Cursor…) use the app; copy the details from Settings. ChatGPT can't reach apps on your computer without a public tunnel.
-- **Prepare application:** one review screen for any draft. **Nothing is ever sent for you:** AI can rank, save and draft; you read it, send it from your own email or the employer's site, then mark it applied.
+- **Prepare application:** one review screen for any draft, to send yourself from your email or the employer's site.
+- **Easy Apply:** one button on any job. A live webview opens inside the app and your connected AI fills in the form, attaches the right CV and, if your settings allow, accepts required privacy notices and presses submit. Those limits are enforced in code. Captchas, logins and questions it can't answer from your profile hand over to you in the same window.
+- **Everyday jobs:** reception, help desk, office and sales are searched and kept in the feed, one in every few places, with their own filter.
+- **Do Not Disturb:** AI work pauses and nothing new opens while a game or anything else runs full screen.
+- **Morning queue:** the first time the app is open after 5am, your best new matches are lined up for one-tap approval.
+- **Site memory:** Easy Apply remembers how each site went and uses that as a hint next time.
+- **Command bar, job map, company pages and reply analytics,** plus German and Italian on the main screens.
+- **Tailored CVs:** your AI rewrites your CV for one job, in the posting's language, as a one-page PDF. Code then checks it against your real documents and removes any employer, skill, date, number or language level it can't find there.
+- **Inbox tracking:** connects to your email read-only with an app password. Replies from companies you applied to move jobs in your pipeline (with Undo), and replies from companies the app doesn't know can be added, which also recovers past applications. Nothing in your mailbox can be changed or sent.
+- **Autopilot:** let an AI agent that can use your computer (Claude, GPT) apply for you. Queue jobs and add your CVs; the agent gets each job's link, your profile, answers and CVs through the MCP connector or a brief you paste, and reports back. Captchas, logins and questions it can't answer come back to you under Needs you. The final submit is off unless you turn it on, and there's a daily limit. The app itself never touches employer sites.
 - **One feed:** jobs from Karriere Südtirol and NOI Techpark, merged and deduplicated. New ones are marked; delisted jobs you track stay visible.
 - **Fit check:**
   - Every posting is scanned for ~40 technologies and scored against your skills, with generic terms like "database" weighted lower.

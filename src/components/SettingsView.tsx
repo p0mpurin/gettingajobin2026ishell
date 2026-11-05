@@ -7,6 +7,7 @@ import { SUGGESTED_WORDS } from "../lib/rules";
 import { api } from "../lib/api";
 import { Button, Panel, SectionTitle, useToast } from "./ui";
 import { AiServiceForm } from "./AssistantView";
+import { AiConnect } from "./AiConnect";
 
 export function SettingsView({
   settings,
@@ -148,6 +149,16 @@ export function SettingsView({
               className="chrome-border h-9 w-full rounded-lg bg-void px-3 text-[13px] outline-none placeholder:text-chrome-600"
             />
           </Row>
+          <Toggle label="Also show everyday jobs: reception, help desk, office and sales" checked={s.everyday_jobs} onChange={(v) => set("everyday_jobs", v)} />
+          <Row label="App language" hint="German and Italian cover the main screens so far. The rest stays in English.">
+            <div className="flex gap-1.5">
+              {([["en", "English"], ["de", "Deutsch"], ["it", "Italiano"]] as const).map(([id, label]) => (
+                <button key={id} onClick={() => set("ui_language", id)} className={`h-8 rounded-lg px-3 text-[12px] font-medium transition ${s.ui_language === id ? "chrome-face" : "border border-line text-chrome-400 hover:text-chrome-100"}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </Row>
           <Toggle label="Include Südtiroler Jobs (suedtirolerjobs.it)" checked={s.include_suedtiroler} onChange={(v) => set("include_suedtiroler", v)} />
           <Toggle label="Include NOI Techpark jobs" checked={s.include_noi} onChange={(v) => set("include_noi", v)} />
           <Row label="Company career sites (onboard.org)" hint="The name before .onboard.org in a company's careers link, e.g. alpitronic for alpitronic.onboard.org. All their jobs are read directly.">
@@ -254,7 +265,19 @@ export function SettingsView({
 
         <Panel className="space-y-5 p-5">
           <SectionTitle>AI</SectionTitle>
-          <p className="text-[12.5px] leading-relaxed text-chrome-400">For the Assistant view. ChatGPT by copy and paste needs none of this: use "Rank with ChatGPT" in For You.</p>
+          <AiConnect
+            provider={s.ai_provider}
+            consented={s.ai_consent}
+            onConnect={async (p) => {
+              const next = { ...s, ai_provider: p, ai_consent: true };
+              setS(next);
+              await onSave(next);
+              toast("Connected");
+            }}
+          />
+          <details>
+            <summary className="cursor-pointer text-[12.5px] text-chrome-500 transition hover:text-chrome-200">Use an API key instead</summary>
+            <div className="mt-3 space-y-3">
           <AiServiceForm base={s.ai_base_url} model={s.ai_model} apiKey={apiKey} hasKey={hasKey} onBase={(v) => set("ai_base_url", v)} onModel={(v) => set("ai_model", v)} onKey={setApiKey} />
           <div className="flex flex-wrap gap-2">
             <Button
@@ -273,6 +296,19 @@ export function SettingsView({
             >
               Save key
             </Button>
+            {hasKey && s.ai_provider !== "key" && (
+              <Button
+                variant="ghost"
+                onClick={async () => {
+                  const next = { ...s, ai_provider: "key", ai_consent: true };
+                  setS(next);
+                  await onSave(next);
+                  toast("Using your API key");
+                }}
+              >
+                Use the key
+              </Button>
+            )}
             {hasKey && (
               <Button
                 variant="ghost"
@@ -287,9 +323,11 @@ export function SettingsView({
               </Button>
             )}
           </div>
+            </div>
+          </details>
           <Row
             label="Connect another AI tool (MCP)"
-            hint="For Claude Desktop, Cursor and others that run on this computer: add this to the tool's MCP settings. It can read your profile and jobs, rank jobs, save jobs and write drafts. It can't send anything. ChatGPT itself can't reach apps on your computer without a public tunnel, so use copy and paste there."
+            hint="For Claude Desktop, Cursor and others that run on this computer: add this to the tool's MCP settings. It gets your profile, jobs and CV paths so it can apply for you, under the limits in Autopilot."
           >
             <Button
               icon={<ClipboardCopy size={14} />}

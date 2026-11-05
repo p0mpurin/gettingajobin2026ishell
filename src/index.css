@@ -162,6 +162,31 @@ select,
   }
 }
 
+/* Screens arrive softly instead of snapping in. */
+.view-in {
+  animation: view-in 0.26s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+@keyframes view-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.map-dot circle {
+  transition: fill-opacity 0.15s ease;
+}
+.map-dot:hover circle {
+  fill-opacity: 0.5;
+}
+.map-dot:focus-visible {
+  outline: none;
+}
+.map-dot:focus-visible circle {
+  stroke-width: 2.5;
+}
+
 @keyframes rise {
   from {
     opacity: 0;
@@ -193,6 +218,7 @@ select,
 
 @media (prefers-reduced-motion: reduce) {
   .animate-rise,
+  .view-in,
   .skeleton {
     animation: none;
   }

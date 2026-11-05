@@ -11,6 +11,9 @@ use std::time::Duration;
 
 const KEY_SERVICE: &str = "BolzanoJobs";
 const KEY_USER: &str = "ai-api-key";
+/// For agents that can use the computer. The in-app assistant can't reach a
+/// form, so it mustn't be able to report having applied.
+pub const AGENT_ONLY: [&str; 2] = ["report_application", "get_application_packet"];
 /// Tool rounds per message, so a confused model can't loop forever.
 const MAX_ROUNDS: usize = 8;
 
@@ -23,7 +26,9 @@ Rules:\n\
 - Be brief and concrete. Refer to jobs by title and company, not by id.";
 
 fn key_entry() -> Result<keyring::Entry, String> {
-    keyring::Entry::new(KEY_SERVICE, KEY_USER).map_err(|e| e.to_string())
+    // A throwaway data folder gets its own entry, so test runs can't touch a real key.
+    let service = if std::env::var_os("BOLZANO_JOBS_DATA").is_some() { "BolzanoJobs-scratch" } else { KEY_SERVICE };
+    keyring::Entry::new(service, KEY_USER).map_err(|e| e.to_string())
 }
 
 pub fn set_key(key: &str) -> Result<(), String> {
@@ -41,12 +46,12 @@ pub fn clear_key() -> Result<(), String> {
     }
 }
 
-fn get_key() -> Result<String, String> {
+pub fn get_key() -> Result<String, String> {
     key_entry()?.get_password().map_err(|_| "Add your API key in Settings first.".to_string())
 }
 
 /// Keys only travel over HTTPS (plain HTTP is allowed for a model on this computer).
-fn valid_base(base: &str) -> bool {
+pub fn valid_base(base: &str) -> bool {
     base.starts_with("https://") || base.starts_with("http://localhost") || base.starts_with("http://127.0.0.1")
 }
 
@@ -60,7 +65,7 @@ pub struct ChatReply {
 }
 
 /// Short, readable description of a tool call.
-fn describe(name: &str, args: &Value) -> String {
+pub fn describe(name: &str, args: &Value) -> String {
     match name {
         "get_profile" => "Read your profile".into(),
         "search_jobs" => format!("Searched jobs for \"{}\"", args["query"].as_str().unwrap_or("")),
@@ -69,20 +74,25 @@ fn describe(name: &str, args: &Value) -> String {
         "rank_jobs" => format!("Ranked {} jobs for you", args["rankings"].as_array().map_or(0, |r| r.len())),
         "save_job" => "Saved a job".into(),
         "draft_application" => "Wrote a draft for you to review".into(),
+        "get_application_queue" => "Read your application queue".into(),
         other => other.to_string(),
     }
 }
 
-async fn complete(client: &reqwest::Client, base: &str, key: &str, model: &str, messages: &[Value]) -> Result<Value, String> {
-    let tool_list: Vec<Value> = tools::definitions()
+pub fn app_tools() -> Vec<Value> {
+    tools::definitions()
         .into_iter()
+        .filter(|(name, _, _)| !AGENT_ONLY.contains(name))
         .map(|(name, description, parameters)| json!({"type": "function", "function": {"name": name, "description": description, "parameters": parameters}}))
-        .collect();
+        .collect()
+}
+
+pub async fn complete(client: &reqwest::Client, base: &str, key: &str, model: &str, messages: &[Value], tool_list: &[Value]) -> Result<Value, String> {
     let res = client
         .post(format!("{}/chat/completions", base.trim_end_matches('/')))
         .bearer_auth(key)
         .timeout(Duration::from_secs(120))
-        .json(&json!({"model": model, "messages": messages, "tools": tool_list}))
+        .json(&if tool_list.is_empty() { json!({"model": model, "messages": messages}) } else { json!({"model": model, "messages": messages, "tools": tool_list}) })
         .send()
         .await
         .map_err(|e| format!("Couldn't reach the AI service ({})", e.without_url()))?;
@@ -111,7 +121,7 @@ pub async fn chat(
     messages.extend(history);
     let mut reply = ChatReply::default();
     for _ in 0..MAX_ROUNDS {
-        let message = complete(client, base, key, model, &messages).await?;
+        let message = complete(client, base, key, model, &messages, &app_tools()).await?;
         if message.is_null() {
             return Err("The AI service sent an empty reply.".into());
         }
@@ -126,7 +136,11 @@ pub async fn chat(
             let name = call["function"]["name"].as_str().unwrap_or("");
             // Arguments are model output: a malformed call becomes an error it can read.
             let args: Value = serde_json::from_str(call["function"]["arguments"].as_str().unwrap_or("{}")).unwrap_or(json!({}));
-            let result = tools::run(client, store, name, &args).await;
+            let result = if AGENT_ONLY.contains(&name) {
+                Err(format!("Unknown tool {name}"))
+            } else {
+                tools::run(client, store, name, &args).await
+            };
             if result.is_ok() {
                 reply.actions.push(describe(name, &args));
             }
@@ -143,15 +157,108 @@ pub async fn chat(
     Ok(reply)
 }
 
-/// One turn using the saved settings and key.
-pub async fn chat_with_settings(client: &reqwest::Client, store: &Mutex<Store>, history: Vec<Value>) -> Result<ChatReply, String> {
-    let (base, model, consent) = {
+/// One turn through the official app the user signed in to. Its tools are the
+/// chat connector's, whose changes wait in the inbox for this app to apply.
+async fn chat_signed_in(store: &Mutex<Store>, kind: crate::cli::Cli, history: &[Value]) -> Result<ChatReply, String> {
+    use crate::cli;
+    let transcript = history
+        .iter()
+        .filter_map(|m| Some(format!("{}: {}", m["role"].as_str()?, m["content"].as_str()?)))
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let dir = store.lock().unwrap().dir();
+    let spec = cli::Spec {
+        system: SYSTEM.to_string(),
+        prompt: format!("The conversation so far. Answer the last user message.\n\n{transcript}"),
+        server: Some(cli::McpServer { name: "bolzano_jobs".into(), program: std::env::current_exe().map_err(|e| e.to_string())?.to_string_lossy().into_owned(), args: vec!["--mcp".into(), "--chat-tools".into()], env: Vec::new() }),
+        cwd: dir.join("agent"),
+    };
+    let collected = Mutex::new((String::new(), Vec::new()));
+    let (stop, finished) = (std::sync::atomic::AtomicBool::new(false), std::sync::atomic::AtomicBool::new(false));
+    cli::run(kind, &spec, &stop, &finished, |event| {
+        let mut c = collected.lock().unwrap();
+        match event {
+            cli::Event::Text(t) => c.0 = t,
+            cli::Event::Tool(name, args) => c.1.push(describe(name.rsplit("__").next().unwrap_or(&name), &args)),
+        }
+    })
+    .await?;
+    let (text, actions) = collected.into_inner().unwrap();
+    {
+        let mut s = store.lock().unwrap();
+        if tools::drain_inbox(&dir, &mut s.data) > 0 {
+            s.save()?;
+            s.mirror();
+        }
+    }
+    Ok(ChatReply { messages: vec![json!({"role": "assistant", "content": text})], actions, text })
+}
+
+/// A single request with no tools: writing or classifying, using the connected AI.
+pub async fn one_shot(client: &reqwest::Client, store: &Mutex<Store>, system: &str, prompt: &str) -> Result<String, String> {
+    use crate::cli;
+    let (base, model, consent, provider, dir) = {
         let s = store.lock().unwrap();
         let st = &s.data.settings;
-        (st.ai_base_url.clone(), st.ai_model.clone(), st.ai_consent)
+        (st.ai_base_url.clone(), st.ai_model.clone(), st.ai_consent, st.ai_provider.clone(), s.dir())
+    };
+    if !consent {
+        return Err("Connect an AI first.".into());
+    }
+    if let Some(kind) = cli::parse(&provider) {
+        let spec = cli::Spec { system: system.to_string(), prompt: prompt.to_string(), server: None, cwd: dir.join("agent") };
+        let (stop, finished) = (std::sync::atomic::AtomicBool::new(false), std::sync::atomic::AtomicBool::new(false));
+        let text = Mutex::new(String::new());
+        cli::run(kind, &spec, &stop, &finished, |event| {
+            if let cli::Event::Text(t) = event {
+                *text.lock().unwrap() = t;
+            }
+        })
+        .await?;
+        return Ok(text.into_inner().unwrap());
+    }
+    if !valid_base(&base) {
+        return Err("The AI address must start with https://".into());
+    }
+    let messages = [json!({"role": "system", "content": system}), json!({"role": "user", "content": prompt})];
+    let reply = complete(client, &base, &get_key()?, &model, &messages, &[]).await?;
+    Ok(reply["content"].as_str().unwrap_or("").to_string())
+}
+
+const MAIL_USER: &str = "mail-app-password";
+
+fn mail_entry() -> Result<keyring::Entry, String> {
+    let service = if std::env::var_os("BOLZANO_JOBS_DATA").is_some() { "BolzanoJobs-scratch" } else { KEY_SERVICE };
+    keyring::Entry::new(service, MAIL_USER).map_err(|e| e.to_string())
+}
+
+pub fn set_mail_password(password: &str) -> Result<(), String> {
+    mail_entry()?.set_password(password).map_err(|e| e.to_string())
+}
+
+pub fn get_mail_password() -> Result<String, String> {
+    mail_entry()?.get_password().map_err(|_| "Connect your email first.".to_string())
+}
+
+pub fn clear_mail_password() -> Result<(), String> {
+    match mail_entry()?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// One turn using the saved settings.
+pub async fn chat_with_settings(client: &reqwest::Client, store: &Mutex<Store>, history: Vec<Value>) -> Result<ChatReply, String> {
+    let (base, model, consent, provider) = {
+        let s = store.lock().unwrap();
+        let st = &s.data.settings;
+        (st.ai_base_url.clone(), st.ai_model.clone(), st.ai_consent, st.ai_provider.clone())
     };
     if !consent {
         return Err("Confirm what gets shared with the AI service first.".into());
+    }
+    if let Some(kind) = crate::cli::parse(&provider) {
+        return chat_signed_in(store, kind, &history).await;
     }
     chat(client, store, &base, &get_key()?, &model, history).await
 }

@@ -22,7 +22,11 @@ import {
   Sparkles,
   TriangleAlert,
   Bus,
+  Rocket,
+  Mail,
+  Building2,
 } from "lucide-react";
+import { t } from "../lib/i18n";
 import { commuteLabel } from "./JobList";
 import type { Fit } from "../lib/foryou";
 import type { Job, Settings, Status, Track, Commute } from "../types";
@@ -71,6 +75,8 @@ function FollowUpBanner({ track, onWrite, onDone, onSnooze }: { track: Track; on
   );
 }
 
+const MAIL_KIND: Record<string, string> = { rejection: "Rejected", interview: "Interview", offer: "Offer", received: "Received", other: "Email" };
+
 export function JobDetail({
   job,
   track,
@@ -91,11 +97,19 @@ export function JobDetail({
   commute,
   fit,
   onPrepare,
+  onEasyApply,
+  onTailor,
+  onCompany,
 }: {
   commute?: Commute;
   fit?: Fit;
   /** Opens the application review screen. */
   onPrepare: () => void;
+  /** Lets the AI apply in the live webview. */
+  onEasyApply: () => void;
+  /** Writes a CV for this job from the user's documents. */
+  onTailor: () => void;
+  onCompany: () => void;
   job: Job;
   track?: Track;
   settings: Settings;
@@ -207,12 +221,30 @@ export function JobDetail({
 
         {/* Actions */}
         <div className="mt-5 flex flex-wrap items-center gap-2">
-          <Button variant="chrome" icon={<Send size={14} />} onClick={onPrepare}>
-            {track?.draft_message ? "Review draft" : "Prepare application"}
+          {!track?.applied && (
+            <Button variant="chrome" icon={<Sparkles size={14} />} onClick={onEasyApply}>
+              {t("Easy Apply")}
+            </Button>
+          )}
+          <Button icon={<ExternalLink size={14} />} onClick={() => openUrl(job.url)}>
+            {t("Open posting")}
           </Button>
-          <Button icon={<ExternalLink size={14} />} onClick={() => openUrl(job.apply_url ?? job.url)}>
-            {job.apply_url ? "Apply page" : "Posting"}
+          <Button icon={<Send size={14} />} onClick={onPrepare}>
+            {t(track?.draft_message ? "Review draft" : "Write it myself")}
           </Button>
+          <Button icon={<FileText size={14} />} onClick={onTailor}>
+            {t(track?.tailored_cv ? "Tailored CV" : "Tailor CV")}
+          </Button>
+          {job.company && (
+            <Button icon={<Building2 size={14} />} onClick={onCompany}>
+              {t("Company page")}
+            </Button>
+          )}
+          {!track?.applied && (
+            <Button icon={<Rocket size={14} />} onClick={() => onUpdate(job, { queued: !track?.queued, needs_you: "" })}>
+              {t(track?.queued ? "In Autopilot" : "Add to Autopilot")}
+            </Button>
+          )}
           <StatusStepper track={track} onSet={(s) => onStatus(job, s)} />
           <div className="ml-auto flex items-center gap-1">
             {job.company && (
@@ -225,6 +257,27 @@ export function JobDetail({
             </Button>
           </div>
         </div>
+
+        {track?.needs_you && (
+          <div className="selectable mt-4 rounded-xl border border-amber/25 bg-amber/[0.05] px-4 py-3 text-[12.5px] leading-relaxed text-amber">
+            <span className="font-semibold">Your AI needs you: </span>
+            {track.needs_you}
+          </div>
+        )}
+
+        {!!track?.mails?.length && (
+          <div className="mt-4 rounded-xl border border-line bg-white/[0.015] px-4 py-3 text-[12.5px] leading-relaxed">
+            <div className="mb-1 flex items-center gap-1.5 font-medium text-chrome-100">
+              <Mail size={12} /> From your email
+            </div>
+            {[...track.mails].reverse().slice(0, 4).map((m) => (
+              <div key={m.message_id} className="flex gap-2 text-chrome-300">
+                <span className={m.kind === "rejection" ? "text-rose" : m.kind === "interview" || m.kind === "offer" ? "text-mint" : "text-chrome-500"}>{MAIL_KIND[m.kind] ?? m.kind}</span>
+                <span className="selectable min-w-0 truncate">{m.subject}</span>
+              </div>
+            ))}
+          </div>
+        )}
 
         {fit && (fit.reasons.length > 0 || fit.warnings.length > 0) && (
           <div className="mt-4 rounded-xl border border-line bg-white/[0.015] px-4 py-3 text-[12.5px] leading-relaxed">

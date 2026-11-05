@@ -23,6 +23,13 @@ export const FIELDS: Field[] = [
     skills: ["JavaScript", "TypeScript", "Python", "Java", "C#", "SQL", "React", "Git", "Linux", "Windows", "IT Support", "Networking"],
   },
   {
+    id: "frontdesk",
+    label: "Reception & customer service",
+    terms: ["Rezeption", "Receptionist", "Kundenservice", "Helpdesk"],
+    pattern: /rezeption|receptionist|ricevimento|empfang|portier|concierge|front.?(?:office|desk)|help.?desk|service.?desk|kundenservice|kundendienst|kundenberat|customer.?(?:service|support|care)|call.?center|assistenza clienti/i,
+    skills: ["Customer service", "Phone support", "Reception", "Microsoft Office", "Booking systems", "Ticketing"],
+  },
+  {
     id: "hospitality",
     label: "Hotels & restaurants",
     terms: ["Hotel", "Koch", "Kellner", "Rezeption"],

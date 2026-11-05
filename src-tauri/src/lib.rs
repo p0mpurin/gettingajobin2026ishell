@@ -1,10 +1,15 @@
 mod ai;
 mod backup;
+mod browser;
+mod cli;
 mod commute;
 mod export;
+mod focus;
+mod mail;
 mod mcp;
 mod sources;
 mod store;
+mod tailor;
 mod tools;
 
 use futures::stream::{self, StreamExt};
@@ -17,6 +22,8 @@ use tauri::{Manager, State};
 pub struct AppState {
     store: Mutex<Store>,
     client: reqwest::Client,
+    /// Set to stop the Easy Apply AI at its next step.
+    apply_stop: std::sync::atomic::AtomicBool,
 }
 
 #[derive(serde::Serialize)]
@@ -78,9 +85,21 @@ fn set_track(state: State<AppState>, id: String, track: Option<Track>) -> Result
     Ok(result)
 }
 
+/// Reception, help desk, office and sales, as local postings word them.
+const EVERYDAY_TERMS: [&str; 10] = ["Rezeption", "Receptionist", "Helpdesk", "IT Support", "Kundenservice", "Customer Service", "Verkauf", "Sekretariat", "Impiegato", "Front Office"];
+
 #[tauri::command]
 async fn fetch_jobs(state: State<'_, AppState>) -> Result<FetchResult, String> {
-    let settings = state.store.lock().unwrap().data.settings.clone();
+    let mut settings = state.store.lock().unwrap().data.settings.clone();
+    // Everyday work is searched for too, whatever the person's main field. With no
+    // terms at all every job is already listed.
+    if settings.everyday_jobs && !settings.terms.is_empty() {
+        for term in EVERYDAY_TERMS {
+            if !settings.terms.iter().any(|t| t.eq_ignore_ascii_case(term)) {
+                settings.terms.push(term.to_string());
+            }
+        }
+    }
     let (karriere, noi, stj, onboard) = tokio::join!(
         sources::karriere::fetch(&state.client, &settings),
         async {
@@ -299,6 +318,169 @@ fn import_ai_ranks(state: State<AppState>, rankings: serde_json::Value) -> Resul
     Ok(result)
 }
 
+/// Applies to one job in the live webview. Resolves when it's sent or the user is needed.
+#[tauri::command]
+async fn apply_start(app: tauri::AppHandle, state: State<'_, AppState>, id: String, bounds: browser::Bounds) -> Result<browser::Outcome, String> {
+    browser::apply(&app, &state.store, &state.client, &state.apply_stop, &id, bounds).await
+}
+
+#[tauri::command]
+fn apply_stop(state: State<AppState>) {
+    state.apply_stop.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+#[tauri::command]
+async fn browser_place(app: tauri::AppHandle, bounds: browser::Bounds) -> Result<(), String> {
+    browser::place(&app, bounds)
+}
+
+#[tauri::command]
+async fn browser_close(app: tauri::AppHandle) -> Result<(), String> {
+    browser::close(&app)
+}
+
+/// Writes a CV for one job from the user's real documents.
+#[tauri::command]
+async fn tailor_cv(state: State<'_, AppState>, id: String) -> Result<tailor::Tailored, String> {
+    tailor::tailor(&state.client, &state.store, &id).await
+}
+
+/// Opens a generated CV. Only ones this app wrote, in its own folder.
+#[tauri::command]
+fn open_tailored(state: State<AppState>, path: String) -> Result<(), String> {
+    let folder = state.store.lock().unwrap().dir().join("tailored");
+    let wanted = std::path::Path::new(&path).canonicalize().map_err(|e| e.to_string())?;
+    if !wanted.starts_with(folder.canonicalize().map_err(|e| e.to_string())?) {
+        return Err("Not a CV from this app.".into());
+    }
+    std::process::Command::new("explorer").arg(&wanted).spawn().map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// Checks the mailbox login works, then remembers it.
+#[tauri::command]
+async fn mail_connect(state: State<'_, AppState>, address: String, host: String, password: String) -> Result<(), String> {
+    let (a, h, p) = (address.trim().to_string(), host.trim().to_string(), password.trim().replace(' ', ""));
+    let (a2, h2, p2) = (a.clone(), h.clone(), p.clone());
+    tokio::task::spawn_blocking(move || mail::test_login(&h2, 993, &a2, &p2)).await.map_err(|e| e.to_string())??;
+    ai::set_mail_password(&p)?;
+    let mut store = state.store.lock().unwrap();
+    let s = &mut store.data.settings;
+    s.mail_enabled = true;
+    s.mail_address = a;
+    s.mail_host = h;
+    s.mail_port = 993;
+    store.save()
+}
+
+#[tauri::command]
+fn mail_disconnect(state: State<AppState>) -> Result<(), String> {
+    ai::clear_mail_password()?;
+    let mut store = state.store.lock().unwrap();
+    store.data.settings.mail_enabled = false;
+    store.save()
+}
+
+/// Looks for new replies, read-only, and updates the pipeline.
+#[tauri::command]
+async fn mail_sync(state: State<'_, AppState>) -> Result<mail::SyncReport, String> {
+    let (host, port, user, auto, days, snapshot) = {
+        let store = state.store.lock().unwrap();
+        let d = &store.data;
+        let s = &d.settings;
+        if !s.mail_enabled {
+            return Err("Connect your email first.".into());
+        }
+        // The first look goes further back, to find applications made elsewhere.
+        let days = if d.mail_last_sync == 0 { 90 } else { 14 };
+        let mut snapshot = store::Data::default();
+        snapshot.tracks = d.tracks.clone();
+        snapshot.mail_seen = d.mail_seen.clone();
+        (s.mail_host.clone(), s.mail_port, s.mail_address.clone(), s.mail_auto_update, days, snapshot)
+    };
+    let password = ai::get_mail_password()?;
+    let (checked, found) = tokio::task::spawn_blocking(move || mail::fetch(&host, port, &user, &password, days, &snapshot)).await.map_err(|e| e.to_string())??;
+    let mut report = mail::SyncReport { checked, ..Default::default() };
+    let mut store = state.store.lock().unwrap();
+    mail::apply(&mut store.data, found, auto, &mut report);
+    store.data.mail_last_sync = store::now();
+    store.save()?;
+    store.mirror();
+    Ok(report)
+}
+
+/// Puts a job back where it was before a reply moved it.
+#[tauri::command]
+fn mail_undo(state: State<AppState>, id: String, message_id: String) -> Result<(), String> {
+    let mut store = state.store.lock().unwrap();
+    let track = store.data.tracks.get_mut(&id).ok_or("That job is gone.")?;
+    let event = track.mails.iter_mut().find(|m| m.message_id == message_id).ok_or("That reply is gone.")?;
+    if !event.previous_status.is_empty() {
+        track.status = std::mem::take(&mut event.previous_status);
+        event.moved_to.clear();
+    }
+    store.save()
+}
+
+#[tauri::command]
+fn mail_suggestions(state: State<AppState>) -> Vec<store::MailSuggestion> {
+    state.store.lock().unwrap().data.mail_suggestions.clone()
+}
+
+#[tauri::command]
+fn mail_resolve(state: State<AppState>, id: String, accept: bool) -> Result<(), String> {
+    let mut store = state.store.lock().unwrap();
+    mail::resolve_suggestion(&mut store.data, &id, accept)?;
+    store.save()?;
+    store.mirror();
+    Ok(())
+}
+
+#[tauri::command]
+fn game_running() -> bool {
+    focus::game_running()
+}
+
+#[tauri::command]
+fn site_memory(state: State<AppState>) -> HashMap<String, store::SiteMemory> {
+    state.store.lock().unwrap().data.sites.clone()
+}
+
+fn cli_of(provider: &str) -> Result<cli::Cli, String> {
+    cli::parse(provider).ok_or_else(|| format!("Unknown sign-in {provider}"))
+}
+
+#[tauri::command]
+async fn cli_status(provider: String) -> Result<cli::Status, String> {
+    Ok(cli::status(cli_of(&provider)?).await)
+}
+
+#[tauri::command]
+fn cli_sign_in(provider: String) -> Result<(), String> {
+    cli::sign_in(cli_of(&provider)?)
+}
+
+#[tauri::command]
+fn cli_install(provider: String) -> Result<(), String> {
+    cli::install(cli_of(&provider)?)
+}
+
+/// The rules agents get, for the brief the user can paste into any AI.
+#[tauri::command]
+fn autopilot_rules() -> &'static str {
+    tools::RULES
+}
+
+/// Records results pasted back from an AI, one job at a time, by the same rules
+/// as the connector. Returns how many were recorded.
+#[tauri::command]
+fn import_reports(state: State<AppState>, reports: Vec<serde_json::Value>) -> Result<usize, String> {
+    let mut store = state.store.lock().unwrap();
+    let recorded = reports.iter().filter(|r| tools::write(&mut store.data, "report_application", r).is_ok()).count();
+    store.save()?;
+    store.mirror();
+    Ok(recorded)
+}
+
 #[tauri::command]
 fn clear_ai_ranks(state: State<AppState>) -> Result<(), String> {
     let mut store = state.store.lock().unwrap();
@@ -380,10 +562,14 @@ fn portable_dir() -> Option<std::path::PathBuf> {
 pub fn run() {
     let portable = portable_dir();
     // Started by an AI tool: serve MCP and stay out of the window system entirely.
+    if std::env::args().any(|a| a == "--mcp-apply") {
+        mcp::serve_apply();
+        return;
+    }
     if std::env::args().any(|a| a == "--mcp") {
         let dir = portable.or_else(|| std::env::var_os("APPDATA").map(|d| std::path::PathBuf::from(d).join("com.p0mpurin.bolzanojobs")));
         if let Some(dir) = dir {
-            mcp::serve(dir);
+            mcp::serve(dir, std::env::args().any(|a| a == "--chat-tools"));
         }
         return;
     }
@@ -399,7 +585,7 @@ pub fn run() {
             }
         }));
     }
-    builder
+    let builder = builder
         .plugin({
             let ws = tauri_plugin_window_state::Builder::default();
             match &portable {
@@ -436,10 +622,11 @@ pub fn run() {
             }
             backup::auto(&dir, &store.data);
             store.mirror();
-            app.manage(AppState { store: Mutex::new(store), client });
+            app.manage(AppState { store: Mutex::new(store), client, apply_stop: Default::default() });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![
+        ;
+    let handler: fn(tauri::ipc::Invoke<tauri::Wry>) -> bool = tauri::generate_handler![
             get_settings,
             mirror_now,
             commutes,
@@ -465,8 +652,37 @@ pub fn run() {
             ai_has_key,
             ai_clear_key,
             apply_ai_inbox,
-            mcp_config
-        ])
+            mcp_config,
+            autopilot_rules,
+            import_reports,
+            apply_start,
+            apply_stop,
+            browser_place,
+            browser_close,
+            cli_status,
+            cli_sign_in,
+            cli_install,
+            tailor_cv,
+            open_tailored,
+            mail_connect,
+            mail_disconnect,
+            mail_sync,
+            mail_undo,
+            mail_suggestions,
+            mail_resolve,
+            game_running,
+            site_memory
+        ];
+    builder
+        // Employer pages live in the Easy Apply webview. They must never reach the
+        // app's commands: those can read the whole profile.
+        .invoke_handler(move |invoke| {
+            if invoke.message.webview_ref().label() != "main" {
+                invoke.resolver.reject("Not available here.");
+                return true;
+            }
+            handler(invoke)
+        })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

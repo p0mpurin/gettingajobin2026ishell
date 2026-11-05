@@ -51,6 +51,38 @@ export interface Track {
   draft_message?: string;
   draft_to?: string;
   draft_cv?: string;
+  /** Waiting for an AI agent to apply. */
+  queued?: boolean;
+  /** What an agent needs from the user before this can go further. */
+  needs_you?: string;
+  /** "ai" when an agent reported submitting this application. */
+  applied_by?: string;
+  /** A CV written for this job. */
+  tailored_cv?: string;
+  tailored_language?: string;
+  /** The day this was prepared in the morning queue, until decided. */
+  morning_day?: string;
+  /** Replies found in the mailbox. */
+  mails?: MailEvent[];
+}
+
+export interface MailEvent {
+  message_id: string;
+  date: number;
+  from: string;
+  subject: string;
+  kind: "rejection" | "interview" | "offer" | "received" | "other";
+  job_id: string;
+  previous_status: string;
+  moved_to: string;
+}
+
+export interface MailSuggestion {
+  id: string;
+  company: string;
+  subject: string;
+  date: number;
+  kind: string;
 }
 
 export interface LanguageLevel {
@@ -81,9 +113,38 @@ export interface AiRank {
   at: number;
 }
 
+export interface CvFile {
+  label: string;
+  language: string;
+  path: string;
+}
+
+export interface SavedAnswer {
+  question: string;
+  answer: string;
+}
+
 export interface Settings {
+  everyday_jobs: boolean;
+  do_not_disturb: boolean;
+  morning_queue: boolean;
+  morning_count: number;
+  ui_language: string;
+  ai_tailor_cv: boolean;
+  mail_enabled: boolean;
+  mail_address: string;
+  mail_host: string;
+  mail_port: number;
+  mail_auto_update: boolean;
+  cvs: CvFile[];
+  answers: SavedAnswer[];
+  ai_can_submit: boolean;
+  ai_accept_privacy: boolean;
+  ai_daily_limit: number;
   onboarded: boolean;
   person: Person;
+  /** "claude" and "codex" use the official app's sign-in; "key" or empty the API key. */
+  ai_provider: string;
   ai_base_url: string;
   ai_model: string;
   ai_consent: boolean;
@@ -118,7 +179,7 @@ export interface SavedView {
   query: string;
 }
 
-export type View = "jobs" | "assistant" | "pipeline" | "insights" | "settings";
+export type View = "jobs" | "map" | "autopilot" | "assistant" | "pipeline" | "insights" | "settings";
 
 export const DISTRICTS: [number, string][] = [
   [43, "Bozen & Umgebung"],

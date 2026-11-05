@@ -1,6 +1,6 @@
 [package]
 name = "bolzano-jobs"
-version = "1.5.0"
+version = "2.0.0"
 edition = "2021"
 
 [lib]
@@ -11,7 +11,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+tauri = { version = "2", features = ["unstable"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-notification = "2"
@@ -20,10 +20,17 @@ tauri-plugin-window-state = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-tokio = { version = "1", features = ["time", "macros"] }
+tokio = { version = "1", features = ["time", "macros", "sync", "process", "net", "io-util", "rt"] }
 scraper = "0.20"
 futures = "0.3"
 pdf-extract = "0.7"
+base64 = "0.22"
+mailparse = "0.16"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
+url_parsed = { package = "url", version = "2" }
+webview2-com = "0.39"
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 keyring = { version = "3", features = ["windows-native"] }
 
 [dev-dependencies]

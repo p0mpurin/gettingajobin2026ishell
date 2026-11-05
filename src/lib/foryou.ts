@@ -27,6 +27,34 @@ export const titleWords = (title: string) =>
     .split(/[^\p{L}\p{N}#+]+/u)
     .filter((w) => w.length > 2 && !STOP.has(w));
 
+/** Reception, help desk, office, shop and service jobs: quick to start, and worth seeing. */
+const EVERYDAY = /rezeption|receptionist|ricevimento|empfang|portier|concierge|front.?(?:office|desk)|back.?office|help.?desk|service.?desk|it.?support|(?:1st|first|2nd|second).?level|support.?(?:techni|mitarbeit|specialist)|kundenservice|kundendienst|kundenberat|customer.?(?:service|support|care)|call.?center|assistenza clienti|sekretari|segreteri|büro|impiegat|sachbearbeit|verwaltung|verkauf|verkäufer|commess|kassier|cassier|filial|einzelhandel/i;
+
+export const isEveryday = (title: string) => EVERYDAY.test(title);
+
+/** Keeps everyday jobs in the feed: one in every few places, however high the rest score. */
+export function mixFeed<T>(sorted: T[], everyday: (item: T) => boolean, every = 4): T[] {
+  const rest = sorted.filter((x) => !everyday(x));
+  const common = sorted.filter(everyday);
+  if (!common.length || !rest.length) return sorted;
+  const out: T[] = [];
+  let r = 0;
+  let c = 0;
+  while (r < rest.length || c < common.length) {
+    // Each spot takes whichever is due: the slot rule first, otherwise the higher rank.
+    const slot = (out.length + 1) % every === 0;
+    const nextRest = rest[r];
+    const nextCommon = common[c];
+    const takeCommon = c < common.length && (r >= rest.length || slot || sorted.indexOf(nextCommon) < sorted.indexOf(nextRest));
+    if (takeCommon) {
+      out.push(common[c++]);
+    } else {
+      out.push(rest[r++]);
+    }
+  }
+  return out;
+}
+
 export interface Signals {
   words: Map<string, number>;
   companies: Map<string, number>;
@@ -87,6 +115,7 @@ export function scoreJob(
     commute?: Commute;
     signals: Signals;
     aiRank?: AiRank;
+    everyday?: boolean;
   },
 ): Fit {
   const { person, analysis, commute, signals, aiRank } = ctx;
@@ -124,6 +153,11 @@ export function scoreJob(
       const inPosting = analysis && person.fields.map(fieldById).find((f) => f && analysis.fieldText && f.pattern.test(analysis.fieldText));
       if (inPosting) add(8);
     }
+  }
+
+  // Everyday work counts as a match by itself unless it's a senior post.
+  if (ctx.everyday && !roleHit && isEveryday(job.title) && !SENIOR_TITLE.test(job.title)) {
+    add(22, "Everyday job, quick to start");
   }
 
   // What they can do.

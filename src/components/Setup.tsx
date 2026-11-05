@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { ArrowLeft, ArrowRight, Check, ClipboardPaste, FileUp, KeyRound, Plug, Sparkles, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Check, FileUp, Sparkles, X } from "lucide-react";
 import type { LanguageLevel, Person, Settings } from "../types";
 import { FIELDS, fieldById } from "../lib/fields";
 import { api } from "../lib/api";
@@ -9,7 +9,7 @@ import { buildProfileText, EMPTY_PERSON, parseCv, searchTerms } from "../lib/pro
 import { WindowControls } from "./TitleBar";
 import { Button } from "./ui";
 import { TagInput } from "./SettingsView";
-import { AiServiceForm } from "./AssistantView";
+import { AiConnect } from "./AiConnect";
 
 const LEVELS: [string, string, string][] = [
   ["student", "Just starting", "Student, first job or changing careers"],
@@ -21,7 +21,6 @@ const JOB_TYPES = ["Full-time", "Part-time", "Internship", "Apprenticeship", "Se
 const COMMUTES: [number, string][] = [[0, "Don't mind"], [30, "30 min"], [45, "45 min"], [60, "1 hour"], [90, "1.5 hours"]];
 const CEFR = ["A2", "B1", "B2", "C1", "C2", "Native"];
 const BASE_LANGUAGES = ["German", "Italian", "English"];
-type AiChoice = "paste" | "key" | "connector";
 
 const STEPS = ["Start", "About you", "Your work", "How you work", "Your skills", "AI", "Finish"];
 
@@ -45,10 +44,8 @@ export function Setup({
   });
   const [skills, setSkills] = useState<string[]>(settings.skills ?? []);
   const [town, setTown] = useState(settings.home_town ?? "");
-  const [ai, setAi] = useState<AiChoice>("paste");
-  const [base, setBase] = useState(settings.ai_base_url);
-  const [model, setModel] = useState(settings.ai_model);
-  const [apiKey, setApiKey] = useState("");
+  const [provider, setProvider] = useState(settings.ai_provider ?? "");
+  const [consented, setConsented] = useState(settings.ai_consent ?? false);
   const [building, setBuilding] = useState<"no" | "working" | "done">("no");
   const [found, setFound] = useState(0);
   const [buildError, setBuildError] = useState("");
@@ -61,7 +58,6 @@ export function Setup({
     setBuilding("working");
     setBuildError("");
     try {
-      if (ai === "key" && apiKey.trim()) await api.aiSetKey(apiKey);
       const next: Settings = {
         ...settings,
         onboarded: true,
@@ -70,8 +66,8 @@ export function Setup({
         home_town: town.trim(),
         profile: buildProfileText(person, skills, town),
         terms: searchTerms(person),
-        ai_base_url: base,
-        ai_model: model,
+        ai_provider: provider,
+        ai_consent: consented,
       };
       setFound(await onFinish(next));
       setBuilding("done");
@@ -218,23 +214,15 @@ export function Setup({
           )}
           {step === 4 && <SkillsStep person={person} skills={skills} onSkills={setSkills} onLanguages={(l) => set("languages", l)} />}
           {step === 5 && (
-            <Question title="Want AI to help?" sub="Optional, and you can change it any time. The app works fully without it.">
-              <div className="space-y-2">
-                <AiCard on={ai === "paste"} onClick={() => setAi("paste")} icon={<ClipboardPaste size={17} />} title="Copy and paste with ChatGPT" tag="Free">
-                  Works with ChatGPT on any plan, or any other AI. The app prepares what to paste, and you paste the answer back.
-                </AiCard>
-                <AiCard on={ai === "key"} onClick={() => setAi("key")} icon={<KeyRound size={17} />} title="Assistant inside the app" tag="Your API key">
-                  Chat right here: "find me jobs and prepare applications". Needs a key from OpenAI, DeepSeek or similar, which you pay for by use.
-                </AiCard>
-                {ai === "key" && (
-                  <div className="chrome-border animate-rise rounded-xl bg-raised p-4">
-                    <AiServiceForm base={base} model={model} apiKey={apiKey} onBase={setBase} onModel={setModel} onKey={setApiKey} />
-                  </div>
-                )}
-                <AiCard on={ai === "connector"} onClick={() => setAi("connector")} icon={<Plug size={17} />} title="Connect another AI tool" tag="Advanced">
-                  For Claude Desktop, Cursor and similar. You'll find the connection details in Settings once setup is done.
-                </AiCard>
-              </div>
+            <Question title="Connect your AI." sub="It ranks your jobs and fills in applications while you watch. Optional, and the app works without it: press Continue to skip.">
+              <AiConnect
+                provider={provider}
+                consented={consented}
+                onConnect={(p) => {
+                  setProvider(p);
+                  setConsented(true);
+                }}
+              />
             </Question>
           )}
           {step === 6 && building !== "done" && (
@@ -498,21 +486,6 @@ function BigChip({ on, onClick, children }: { on: boolean; onClick: () => void; 
   return (
     <button onClick={onClick} aria-pressed={on} className={`h-10 rounded-full px-4 text-[13px] font-medium transition active:scale-[0.97] ${on ? "chrome-face" : "chrome-border bg-raised text-chrome-300 hover:bg-hover hover:text-chrome-50"}`}>
       {children}
-    </button>
-  );
-}
-
-function AiCard({ on, onClick, icon, title, tag, children }: { on: boolean; onClick: () => void; icon: ReactNode; title: string; tag: string; children: ReactNode }) {
-  return (
-    <button onClick={onClick} aria-pressed={on} className={`flex w-full items-start gap-3.5 rounded-xl p-4 text-left transition ${on ? "chrome-border bg-elevated" : "border border-line bg-white/[0.012] hover:bg-raised"}`}>
-      <span className={`mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${on ? "chrome-face" : "bg-white/[0.05] text-chrome-400"}`}>{icon}</span>
-      <span className="min-w-0 flex-1">
-        <span className="flex items-center gap-2 text-[14px] font-semibold text-chrome-50">
-          {title}
-          <span className="rounded-full border border-line-strong px-2 py-px text-[10.5px] font-medium text-chrome-400">{tag}</span>
-        </span>
-        <span className="mt-1 block text-[12.5px] leading-relaxed text-chrome-500">{children}</span>
-      </span>
     </button>
   );
 }

@@ -5,6 +5,8 @@ import type { Analysis } from "../lib/match";
 import { weeklyStats } from "../lib/weekly";
 import { Flame, Target } from "lucide-react";
 import { Panel, ScoreRing, SectionTitle } from "./ui";
+import { ENOUGH, percent, replyStats, type Row } from "../lib/analytics";
+import { t } from "../lib/i18n";
 
 export function InsightsView({
   jobs,
@@ -27,6 +29,7 @@ export function InsightsView({
   const applied = Object.values(tracks).filter((t) => ["applied", "interview", "offer", "rejected"].includes(t.status)).length;
   const interviews = Object.values(tracks).filter((t) => ["interview", "offer"].includes(t.status)).length;
 
+  const replies = replyStats(Object.values(tracks));
   const companies = top(live.map((j) => j.company).filter(Boolean), 8);
   const places = top(live.map((j) => j.location).filter(Boolean), 8);
   const missing = top(scored.flatMap(([, a]) => a.missing), 10);
@@ -37,7 +40,20 @@ export function InsightsView({
         <h1 className="chrome-text text-[22px] font-semibold tracking-tight">Insights</h1>
         <p className="mt-1 text-[13px] text-chrome-500">What the South Tyrol market looks like right now, and how your search is going.</p>
       </div>
-      <div className="mx-auto max-w-5xl space-y-5 p-7">
+      <div className="view-in mx-auto max-w-5xl space-y-5 p-7">
+        <Panel className="p-5">
+          <SectionTitle>{t("What gets replies")}</SectionTitle>
+          {replies.total === 0 ? (
+            <p className="text-[12.5px] leading-relaxed text-chrome-500">Once you've sent applications, this shows which CVs, messages and kinds of job actually get answers.</p>
+          ) : (
+            <div className="grid gap-5 md:grid-cols-3">
+              <ReplyGroup title="By CV" rows={replies.byCv} />
+              <ReplyGroup title="By message" rows={replies.byMessage} />
+              <ReplyGroup title="By kind of job" rows={replies.byJob} />
+            </div>
+          )}
+          {replies.total > 0 && replies.total < ENOUGH * 2 && <p className="mt-3 text-[11.5px] text-chrome-600">You've sent {replies.total} so far: too few to draw conclusions, so treat these as early hints.</p>}
+        </Panel>
         <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
           <Stat label="Open jobs" value={live.length} hint={`${newToday} new in 24h`} />
           <Stat label="Junior-friendly" value={junior} hint={`${pct(junior, live.length)} of all`} />
@@ -145,6 +161,29 @@ function MiniStat({ label, value, hint }: { label: string; value: string; hint: 
       <div className="text-[11.5px] text-chrome-500">{label}</div>
       <div className="chrome-text mt-1 text-[22px] font-semibold leading-none tabular-nums">{value}</div>
       <div className="mt-1.5 text-[11px] text-chrome-600">{hint}</div>
+    </div>
+  );
+}
+
+function ReplyGroup({ title, rows }: { title: string; rows: Row[] }) {
+  return (
+    <div>
+      <div className="mb-2 text-[12px] font-medium text-chrome-400">{title}</div>
+      <div className="space-y-2">
+        {rows.slice(0, 5).map((r) => (
+          <div key={r.label}>
+            <div className="flex text-[12px]">
+              <span className="min-w-0 flex-1 truncate text-chrome-200">{r.label}</span>
+              <span className="ml-2 shrink-0 tabular-nums text-chrome-500">
+                {r.replies} of {r.sent} · {r.interviews} interview{r.interviews === 1 ? "" : "s"}
+              </span>
+            </div>
+            <div className="mt-1 h-1 overflow-hidden rounded-full bg-white/[0.06]">
+              <div className="h-full rounded-full bg-gradient-to-r from-chrome-500 to-chrome-100 transition-[width] duration-500" style={{ width: `${percent(r.replies, r.sent)}%` }} />
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

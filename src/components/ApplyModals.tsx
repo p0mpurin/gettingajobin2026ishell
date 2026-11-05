@@ -1,11 +1,11 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import { ArrowUpRight, Check, ClipboardCopy, ExternalLink, Mail, Sparkles, Trash2 } from "lucide-react";
+import { ArrowUpRight, Check, ClipboardCopy, ExternalLink, Loader2, Mail, RotateCw, ShieldAlert, Sparkles, Trash2 } from "lucide-react";
 import type { Job, Settings, Track } from "../types";
 import type { Analysis } from "../lib/match";
 import { buildPrompt, LANGUAGES, TONES } from "../lib/prompt";
 import { buildRankPrompt, findApplyEmail, mailtoLink, parseRankReply } from "../lib/gpt";
-import { api } from "../lib/api";
+import { api, type Tailored } from "../lib/api";
 import { Button, Modal, useToast } from "./ui";
 
 const field = "chrome-border h-9 w-full rounded-lg bg-void px-3 text-[13px] text-chrome-100 outline-none placeholder:text-chrome-600";
@@ -73,6 +73,8 @@ export function ApplyModal({
       sent_message: subject.trim() ? `Subject: ${subject.trim()}\n\n${message}` : message,
       cv,
       contact: track?.contact || to,
+      queued: false,
+      needs_you: "",
       draft_to: "",
       draft_subject: "",
       draft_message: "",
@@ -143,6 +145,77 @@ export function ApplyModal({
             <Button variant="chrome" icon={<Check size={14} />} onClick={markApplied}>
               I've sent it
             </Button>
+          </div>
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+/** Writes a CV for one job and shows it, with whatever the fact check took out. */
+export function TailorModal({ job, onDone, onClose }: { job: Job; onDone: () => void; onClose: () => void }) {
+  const [result, setResult] = useState<Tailored | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(true);
+
+  const run = useCallback(async () => {
+    setBusy(true);
+    setError("");
+    setResult(null);
+    try {
+      setResult(await api.tailorCv(job.id));
+      onDone();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job.id]);
+
+  useEffect(() => {
+    run();
+  }, [run]);
+
+  return (
+    <Modal title={`Tailored CV · ${job.title}`} onClose={onClose} width="max-w-3xl">
+      <div className="space-y-3">
+        {busy && (
+          <div className="flex h-40 items-center justify-center gap-2.5 text-[13px] text-chrome-400">
+            <Loader2 size={15} className="animate-spin" /> Your AI is writing it, and it'll be checked against your documents…
+          </div>
+        )}
+        {error && <p className="selectable text-[13px] leading-relaxed text-rose">{error}</p>}
+        {result && (
+          <>
+            {result.removed.length > 0 && (
+              <div className="rounded-lg border border-amber/25 bg-amber/[0.05] px-3 py-2 text-[12px] leading-relaxed text-amber">
+                <div className="mb-0.5 flex items-center gap-1.5 font-semibold">
+                  <ShieldAlert size={13} /> Taken out because it isn't in your documents
+                </div>
+                {result.removed.slice(0, 8).map((r) => (
+                  <div key={r} className="selectable">{r}</div>
+                ))}
+              </div>
+            )}
+            {/* The AI's text is shown with scripts off: sandbox with no permissions. */}
+            <iframe title="Tailored CV preview" sandbox="" srcDoc={result.html} className="h-[56vh] w-full rounded-lg bg-white" />
+            <p className="text-[11.5px] leading-relaxed text-chrome-600">Read it before it goes out. Facts are checked, but rewording and translation can't be checked automatically. Easy Apply will use this CV for this job.</p>
+          </>
+        )}
+        <div className="flex items-center gap-2 border-t border-line pt-3">
+          <Button variant="ghost" onClick={onClose}>
+            Close
+          </Button>
+          <div className="ml-auto flex gap-2">
+            <Button disabled={busy} icon={<RotateCw size={13} />} onClick={run}>
+              Write it again
+            </Button>
+            {result && (
+              <Button variant="chrome" icon={<ExternalLink size={14} />} onClick={() => api.openTailored(result.path)}>
+                Open PDF
+              </Button>
+            )}
           </div>
         </div>
       </div>
