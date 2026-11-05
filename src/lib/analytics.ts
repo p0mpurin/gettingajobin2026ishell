@@ -1,6 +1,6 @@
 /** What actually gets replies, from the user's own applications. */
 import type { Track } from "../types";
-import { FIELDS } from "./fields.ts";
+import { fieldsIn } from "./fields.ts";
 import { isEveryday } from "./foryou.ts";
 
 export interface Row {
@@ -34,7 +34,7 @@ export function replyStats(all: Track[]) {
     total: sent.length,
     byCv: tally(sent, (t) => (t.tailored_cv ? "Tailored for the job" : t.cv?.trim() || "Not recorded")),
     byMessage: tally(sent, (t) => (t.applied_by === "ai" ? "Sent by AI" : t.sent_message?.trim() ? "Your own message" : "Not recorded")),
-    byJob: tally(sent, (t) => (isEveryday(t.title) ? "Everyday jobs" : (FIELDS.find((f) => f.pattern.test(t.title))?.label ?? "Other"))),
+    byJob: tally(sent, (t) => (isEveryday(t.title) ? "Everyday jobs" : (fieldsIn(t.title)[0]?.label ?? "Other"))),
   };
 }
 

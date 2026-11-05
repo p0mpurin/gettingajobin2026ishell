@@ -85,21 +85,10 @@ fn set_track(state: State<AppState>, id: String, track: Option<Track>) -> Result
     Ok(result)
 }
 
-/// Reception, help desk, office and sales, as local postings word them.
-const EVERYDAY_TERMS: [&str; 10] = ["Rezeption", "Receptionist", "Helpdesk", "IT Support", "Kundenservice", "Customer Service", "Verkauf", "Sekretariat", "Impiegato", "Front Office"];
-
 #[tauri::command]
 async fn fetch_jobs(state: State<'_, AppState>) -> Result<FetchResult, String> {
-    let mut settings = state.store.lock().unwrap().data.settings.clone();
-    // Everyday work is searched for too, whatever the person's main field. With no
-    // terms at all every job is already listed.
-    if settings.everyday_jobs && !settings.terms.is_empty() {
-        for term in EVERYDAY_TERMS {
-            if !settings.terms.iter().any(|t| t.eq_ignore_ascii_case(term)) {
-                settings.terms.push(term.to_string());
-            }
-        }
-    }
+    // Exactly the user's terms: a term they removed stays removed.
+    let settings = state.store.lock().unwrap().data.settings.clone();
     let (karriere, noi, stj, onboard) = tokio::join!(
         sources::karriere::fetch(&state.client, &settings),
         async {
@@ -435,6 +424,12 @@ fn mail_resolve(state: State<AppState>, id: String, accept: bool) -> Result<(), 
     Ok(())
 }
 
+/// One request to the connected AI with no tools: understanding preferences, ranking.
+#[tauri::command]
+async fn ai_one_shot(state: State<'_, AppState>, system: String, prompt: String) -> Result<String, String> {
+    ai::one_shot(&state.client, &state.store, &system, &prompt).await
+}
+
 #[tauri::command]
 fn game_running() -> bool {
     focus::game_running()
@@ -671,7 +666,8 @@ pub fn run() {
             mail_suggestions,
             mail_resolve,
             game_running,
-            site_memory
+            site_memory,
+            ai_one_shot
         ];
     builder
         // Employer pages live in the Easy Apply webview. They must never reach the

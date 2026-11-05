@@ -3,7 +3,7 @@
  * words. Everything here runs locally; an AI's opinion is one optional input.
  */
 import type { AiRank, Commute, Job, Person, Track } from "../types";
-import { fieldById } from "./fields.ts";
+import { fieldById, fieldsIn, inField, wantedFields } from "./fields.ts";
 import type { Analysis } from "./match.ts";
 import { levelRank } from "./profile.ts";
 
@@ -14,6 +14,33 @@ export interface Fit {
   reasons: string[];
   /** What speaks against it. */
   warnings: string[];
+  /**
+   * Whether anything about the job matches what they asked for. Being new, nearby
+   * or open to beginners makes a good job better, but never makes it a match.
+   */
+  relevant: boolean;
+  /** The field they said never to show, if this is in it. */
+  avoided?: string;
+}
+
+/** Words that say nothing alone: "service" shouldn't match every technician. */
+const VAGUE = new Set("service manager assistant assistent assistente support specialist spezialist junior senior worker mitarbeiter operator kraft arbeiter work job jobs normal arbeit lavoro stelle".split(" "));
+
+/** A search term in a title, as the start of a word, or a whole word when short ("IT"). */
+function termIn(term: string, title: string): boolean {
+  const t = term.trim();
+  if (t.length < 2) return false;
+  const safe = t.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const end = t.length <= 3 ? "(?![\\p{L}\\p{N}])" : "";
+  return new RegExp(`(?<![\\p{L}\\p{N}])${safe}${end}`, "iu").test(title);
+}
+
+/** The field to never show that this title falls in. What they asked for wins. */
+export function avoidedField(title: string, person: Person): string | undefined {
+  if (!person.avoid_fields?.length) return undefined;
+  const wanted = wantedFields(person);
+  if (wanted.some((f) => inField(f, title)) || person.roles.some((r) => r.trim() && title.toLowerCase().includes(r.trim().toLowerCase()))) return undefined;
+  return person.avoid_fields.map(fieldById).find((f) => f && inField(f, title))?.label;
 }
 
 /** Title words that say nothing about the job. */
@@ -31,29 +58,6 @@ export const titleWords = (title: string) =>
 const EVERYDAY = /rezeption|receptionist|ricevimento|empfang|portier|concierge|front.?(?:office|desk)|back.?office|help.?desk|service.?desk|it.?support|(?:1st|first|2nd|second).?level|support.?(?:techni|mitarbeit|specialist)|kundenservice|kundendienst|kundenberat|customer.?(?:service|support|care)|call.?center|assistenza clienti|sekretari|segreteri|büro|impiegat|sachbearbeit|verwaltung|verkauf|verkäufer|commess|kassier|cassier|filial|einzelhandel/i;
 
 export const isEveryday = (title: string) => EVERYDAY.test(title);
-
-/** Keeps everyday jobs in the feed: one in every few places, however high the rest score. */
-export function mixFeed<T>(sorted: T[], everyday: (item: T) => boolean, every = 4): T[] {
-  const rest = sorted.filter((x) => !everyday(x));
-  const common = sorted.filter(everyday);
-  if (!common.length || !rest.length) return sorted;
-  const out: T[] = [];
-  let r = 0;
-  let c = 0;
-  while (r < rest.length || c < common.length) {
-    // Each spot takes whichever is due: the slot rule first, otherwise the higher rank.
-    const slot = (out.length + 1) % every === 0;
-    const nextRest = rest[r];
-    const nextCommon = common[c];
-    const takeCommon = c < common.length && (r >= rest.length || slot || sorted.indexOf(nextCommon) < sorted.indexOf(nextRest));
-    if (takeCommon) {
-      out.push(common[c++]);
-    } else {
-      out.push(rest[r++]);
-    }
-  }
-  return out;
-}
 
 export interface Signals {
   words: Map<string, number>;
@@ -115,7 +119,10 @@ export function scoreJob(
     commute?: Commute;
     signals: Signals;
     aiRank?: AiRank;
-    everyday?: boolean;
+    /** Their search terms. */
+    terms?: string[];
+    /** Already on their list, so its own words can't count as "like jobs you saved". */
+    tracked?: boolean;
   },
 ): Fit {
   const { person, analysis, commute, signals, aiRank } = ctx;
@@ -128,36 +135,45 @@ export function scoreJob(
     if (why) reasons.push([points, why]);
   };
 
+  const wanted = wantedFields(person);
+  // The title clearly belongs to work they didn't ask for: loose word matches don't count.
+  const elsewhere = fieldsIn(job.title).some((f) => !wanted.includes(f));
+  let relevant = false;
+
   // What they want to do.
   let roleHit = false;
   for (const role of person.roles) {
     const r = role.toLowerCase().trim();
     if (!r) continue;
-    const words = titleWords(r);
-    if (title.includes(r)) {
+    const words = titleWords(r).filter((w) => !VAGUE.has(w));
+    if (termIn(r, job.title)) {
       add(40, `The job you asked for: ${role}`);
       roleHit = true;
       break;
     }
-    if (words.length && words.some((w) => title.includes(w))) {
+    if (!elsewhere && words.length && words.some((w) => termIn(w, job.title))) {
       add(26, `Close to ${role}`);
       roleHit = true;
       break;
     }
   }
+  relevant = roleHit;
   if (!roleHit) {
-    const field = person.fields.map(fieldById).find((f) => f?.pattern.test(job.title));
-    if (field) add(24, `In your field: ${field.label}`);
-    else {
-      // The posting is weaker evidence than the title.
-      const inPosting = analysis && person.fields.map(fieldById).find((f) => f && analysis.fieldText && f.pattern.test(analysis.fieldText));
-      if (inPosting) add(8);
+    const field = wanted.find((f) => inField(f, job.title));
+    if (field) {
+      add(24, `In your field: ${field.label}`);
+      relevant = true;
+    } else {
+      // With no fields chosen, their terms are all there is to go on.
+      const term = elsewhere && wanted.length ? undefined : ctx.terms?.find((t) => termIn(t, job.title));
+      if (term) {
+        add(18, `Matches your search: ${term}`);
+        relevant = true;
+      } else if (analysis?.fieldText && wanted.some((f) => f.pattern.test(analysis.fieldText))) {
+        // The posting is weaker evidence than the title.
+        add(8);
+      }
     }
-  }
-
-  // Everyday work counts as a match by itself unless it's a senior post.
-  if (ctx.everyday && !roleHit && isEveryday(job.title) && !SENIOR_TITLE.test(job.title)) {
-    add(22, "Everyday job, quick to start");
   }
 
   // What they can do.
@@ -165,6 +181,8 @@ export function scoreJob(
     const top = analysis.matched.slice(0, 3).join(", ");
     add(Math.min(30, analysis.matched.length * 7), `Uses your skills: ${top}`);
     if (analysis.missing.length > analysis.matched.length * 2) add(-8);
+    // One shared word could be anywhere; two start to mean something.
+    if (analysis.matched.length >= 2 && !elsewhere) relevant = true;
   }
 
   // Experience level.
@@ -234,8 +252,10 @@ export function scoreJob(
     warnings.push("You passed on this company");
   }
   learned = clamp(learned + Math.max(0, company), -15, 15);
-  if (learned >= 4) add(learned, "Like jobs you've saved");
-  else add(learned);
+  if (learned >= 4 && !ctx.tracked) {
+    add(learned, "Like jobs you've saved");
+    relevant = true;
+  } else add(learned);
 
   let final = clamp(Math.round(score), 0, 100);
   const ordered = reasons.sort((a, b) => b[0] - a[0]).map(([, why]) => why);
@@ -243,6 +263,13 @@ export function scoreJob(
   if (aiRank) {
     final = clamp(Math.round(final * 0.5 + aiRank.score * 0.5), 0, 100);
     if (aiRank.reason) ordered.unshift(aiRank.reason);
+    // It read the job and the person, so its verdict settles whether this is a match.
+    if (aiRank.score >= 60) relevant = true;
+    if (aiRank.score < 35) relevant = false;
   }
-  return { score: final, reasons: ordered, warnings };
+  // Someone who hasn't said what they want yet still gets a feed.
+  if (!wanted.length && !person.roles.length && !ctx.terms?.length && !ctx.skills.length) relevant = true;
+  const avoided = avoidedField(job.title, person);
+  if (avoided) warnings.push(`You chose never to see ${avoided}`);
+  return { score: final, reasons: ordered, warnings, relevant: relevant && !avoided, avoided };
 }

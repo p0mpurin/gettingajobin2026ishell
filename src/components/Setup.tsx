@@ -164,10 +164,32 @@ export function Setup({
             <Question title="What kind of work do you want?" sub="Pick any fields that fit. Add job titles too if you have something specific in mind.">
               <div className="flex flex-wrap gap-2">
                 {FIELDS.map((f) => (
-                  <BigChip key={f.id} on={person.fields.includes(f.id)} onClick={() => set("fields", toggle(person.fields, f.id))}>
+                  <BigChip
+                    key={f.id}
+                    on={person.fields.includes(f.id)}
+                    onClick={() => {
+                      set("fields", toggle(person.fields, f.id));
+                      set("avoid_fields", person.avoid_fields.filter((x) => x !== f.id));
+                    }}
+                  >
                     {f.label}
                   </BigChip>
                 ))}
+              </div>
+              <div className="mt-6">
+                <Label>Never show me (optional)</Label>
+                <div className="flex flex-wrap gap-1.5">
+                  {FIELDS.filter((f) => !person.fields.includes(f.id)).map((f) => (
+                    <button
+                      key={f.id}
+                      aria-pressed={person.avoid_fields.includes(f.id)}
+                      onClick={() => set("avoid_fields", toggle(person.avoid_fields, f.id))}
+                      className={`h-7 rounded-full px-3 text-[12px] transition ${person.avoid_fields.includes(f.id) ? "border border-rose/40 bg-rose/10 text-rose line-through" : "border border-line text-chrome-500 hover:text-chrome-200"}`}
+                    >
+                      {f.label}
+                    </button>
+                  ))}
+                </div>
               </div>
               <div className="mt-6">
                 <Label>Job titles (optional)</Label>

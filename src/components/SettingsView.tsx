@@ -4,6 +4,9 @@ import { ArchiveRestore, ClipboardCopy, DatabaseBackup, Download, FileSpreadshee
 import type { Settings } from "../types";
 import { DISTRICTS } from "../types";
 import { SUGGESTED_WORDS } from "../lib/rules";
+import { FIELDS } from "../lib/fields";
+import { reconcile, searchTerms } from "../lib/profile";
+import { buildPrefsPrompt, parsePrefs, PREFS_SYSTEM } from "../lib/prefs";
 import { api } from "../lib/api";
 import { Button, Panel, SectionTitle, useToast } from "./ui";
 import { AiServiceForm } from "./AssistantView";
@@ -21,6 +24,35 @@ export function SettingsView({
   onRestored: () => void;
   onRunSetup: () => void;
 }) {
+  const [describe, setDescribe] = useState("");
+  const [understanding, setUnderstanding] = useState(false);
+
+  function cycleField(id: string) {
+    const p = s.person;
+    const want = p.fields.includes(id);
+    const avoid = p.avoid_fields?.includes(id);
+    set("person", {
+      ...p,
+      fields: want ? p.fields.filter((x) => x !== id) : avoid ? p.fields : [...p.fields, id],
+      avoid_fields: want ? [...(p.avoid_fields ?? []), id] : (p.avoid_fields ?? []).filter((x) => x !== id),
+    });
+  }
+
+  async function understand() {
+    setUnderstanding(true);
+    try {
+      const prefs = parsePrefs(await api.aiOneShot(PREFS_SYSTEM, buildPrefsPrompt(describe)));
+      const person = { ...s.person, roles: prefs.roles, fields: prefs.fields, avoid_fields: prefs.avoid_fields, level: prefs.level || s.person.level };
+      // Describing it again starts over: old terms would keep the old jobs coming.
+      setS({ ...s, person, terms: [...new Set([...prefs.terms, ...searchTerms(person)])] });
+      toast("Filled in. Check it, then save");
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e), "warn");
+    } finally {
+      setUnderstanding(false);
+    }
+  }
+
   const [apiKey, setApiKey] = useState("");
   const [hasKey, setHasKey] = useState(false);
   useEffect(() => {
@@ -110,7 +142,10 @@ export function SettingsView({
             variant="chrome"
             disabled={!dirty}
             onClick={async () => {
-              await onSave(s);
+              // Search terms and preferences stay in step, and the screen shows the result.
+              const next = reconcile(settings, s);
+              setS(next);
+              await onSave(next);
               toast("Settings saved");
             }}
           >
@@ -120,6 +155,46 @@ export function SettingsView({
       </div>
 
       <div className="mx-auto max-w-3xl space-y-5 p-7">
+        <Panel className="space-y-5 p-5">
+          <SectionTitle>What you're looking for</SectionTitle>
+          {s.ai_consent && (
+            <Row label="Say it in your own words" hint="Your AI fills in the choices below for you to check. Only this text is sent.">
+              <div className="flex gap-2">
+                <input
+                  value={describe}
+                  onChange={(e) => setDescribe(e.target.value)}
+                  placeholder="e.g. supermarket or warehouse work, near Meran, no sales"
+                  className="chrome-border h-9 min-w-0 flex-1 rounded-lg bg-void px-3 text-[13px] outline-none placeholder:text-chrome-600"
+                />
+                <Button disabled={!describe.trim() || understanding} icon={<Sparkles size={14} />} onClick={understand}>
+                  {understanding ? "Reading…" : "Fill in"}
+                </Button>
+              </div>
+            </Row>
+          )}
+          <Row label="Kinds of work" hint="Click once to want it, twice to never see it, again to clear. Your feed only recommends real matches for these and your job titles.">
+            <div className="flex flex-wrap gap-1.5">
+              {FIELDS.map((f) => {
+                const want = s.person.fields.includes(f.id);
+                const avoid = s.person.avoid_fields?.includes(f.id);
+                return (
+                  <button
+                    key={f.id}
+                    onClick={() => cycleField(f.id)}
+                    aria-label={`${f.label}: ${want ? "wanted" : avoid ? "never show" : "no preference"}`}
+                    className={`h-8 rounded-full px-3 text-[12px] font-medium transition ${want ? "chrome-face" : avoid ? "border border-rose/40 bg-rose/10 text-rose line-through" : "border border-line text-chrome-400 hover:text-chrome-100"}`}
+                  >
+                    {f.label}
+                  </button>
+                );
+              })}
+            </div>
+          </Row>
+          <Row label="Job titles" hint="In your own words, in any language.">
+            <TagInput values={s.person.roles} onChange={(v) => set("person", { ...s.person, roles: v })} placeholder="e.g. Cashier, Barista…" />
+          </Row>
+        </Panel>
+
         <Panel className="space-y-5 p-5">
           <SectionTitle>Search</SectionTitle>
           <Row label="Search terms" hint="Each term is searched on Karriere Südtirol and Südtiroler Jobs; results are merged and duplicates folded.">
@@ -149,7 +224,6 @@ export function SettingsView({
               className="chrome-border h-9 w-full rounded-lg bg-void px-3 text-[13px] outline-none placeholder:text-chrome-600"
             />
           </Row>
-          <Toggle label="Also show everyday jobs: reception, help desk, office and sales" checked={s.everyday_jobs} onChange={(v) => set("everyday_jobs", v)} />
           <Row label="App language" hint="German and Italian cover the main screens so far. The rest stays in English.">
             <div className="flex gap-1.5">
               {([["en", "English"], ["de", "Deutsch"], ["it", "Italiano"]] as const).map(([id, label]) => (

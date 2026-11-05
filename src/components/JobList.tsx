@@ -142,7 +142,7 @@ export function JobList({
               <p className="truncate text-[12px] text-chrome-500">{firstName ? `${t("For You")}: ${firstName}` : t("Ranked for you")} · {t("best first")}</p>
             </div>
             <Button size="sm" className="ml-auto" icon={<Sparkles size={12} />} onClick={onAskGpt}>
-              {t("Rank with ChatGPT")}
+              {t("Rank with AI")}
             </Button>
           </div>
         )}

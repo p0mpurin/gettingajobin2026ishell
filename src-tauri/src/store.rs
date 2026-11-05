@@ -45,8 +45,6 @@ pub struct Settings {
     pub ai_model: String,
     /// The user has confirmed what gets shared with that service.
     pub ai_consent: bool,
-    /// Search and rank everyday jobs too: reception, help desk, office, sales.
-    pub everyday_jobs: bool,
     /// Pause AI work while a game or anything else runs full screen.
     pub do_not_disturb: bool,
     /// Prepare the day's best matches for one-tap approval.
@@ -107,6 +105,8 @@ pub struct Person {
     pub roles: Vec<String>,
     /// Fields of work, ids from lib/fields.ts.
     pub fields: Vec<String>,
+    /// Fields never to show.
+    pub avoid_fields: Vec<String>,
     pub job_types: Vec<String>,
     pub languages: Vec<LanguageLevel>,
     /// Longest acceptable public-transport trip in minutes (0 = don't mind).
@@ -219,7 +219,6 @@ impl Default for Settings {
             ai_base_url: "https://api.openai.com/v1".into(),
             ai_model: "gpt-4o-mini".into(),
             ai_consent: false,
-            everyday_jobs: true,
             do_not_disturb: true,
             morning_queue: false,
             morning_count: 5,

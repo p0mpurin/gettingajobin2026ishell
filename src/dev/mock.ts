@@ -31,10 +31,10 @@ export function installMock() {
       case "get_settings":
         return (settings ??= {
           terms: ["Software", "Developer", "IT"], districts: [43, 50], include_noi: true, include_suedtiroler: true, onboard_companies: ["alpitronic"], onboard_local_only: true,
-          everyday_jobs: true, do_not_disturb: true, morning_queue: location.search.includes("morning"), morning_count: 3, ui_language: new URLSearchParams(location.search).get("lang") ?? "en", ai_tailor_cv: false, mail_enabled: false, mail_address: "", mail_host: "", mail_port: 993, mail_auto_update: true,
+          do_not_disturb: true, morning_queue: location.search.includes("morning"), morning_count: 3, ui_language: new URLSearchParams(location.search).get("lang") ?? "en", ai_tailor_cv: false, mail_enabled: false, mail_address: "", mail_host: "", mail_port: 993, mail_auto_update: true,
           cvs: [{ label: "CV English", language: "English", path: "C:\\CV\\cv-en.pdf" }], answers: [{ question: "When can you start?", answer: "From next month" }], ai_can_submit: false, ai_accept_privacy: false, ai_daily_limit: 10,
           onboarded: !location.search.includes("setup"), ai_provider: "", ai_base_url: "https://api.openai.com/v1", ai_model: "gpt-4o-mini", ai_consent: location.search.includes("chat"),
-          person: { name: location.search.includes("setup") ? "" : "Alex Example", email: "", phone: "", links: "", level: "junior", roles: [], fields: location.search.includes("setup") ? [] : ["it"], job_types: [], languages: [{ lang: "English", level: "C1" }, { lang: "German", level: "A2" }], max_commute: 60, background: "" },
+          person: { name: location.search.includes("setup") ? "" : "Alex Example", email: "", phone: "", links: "", level: "junior", roles: [], avoid_fields: location.search.includes("sales") ? ["sales"] : [], fields: location.search.includes("setup") ? [] : ["it"], job_types: [], languages: [{ lang: "English", level: "C1" }, { lang: "German", level: "A2" }], max_commute: 60, background: "" },
           profile: "Name: Alex Example\nLanguages: English C1, German A2",
           skills: ["C#", ".NET", "C", "C++", "Python", "JavaScript", "TypeScript", "Rust", "SQL", "HTML", "CSS", "React", "Git", "REST", "Windows", "Linux", "Networking", "IT Support"],
           auto_refresh_minutes: 60, notify_new: true, home_town: "Kaltern", vault_path: "", mirror_path: "", follow_up_days: 7, merge_duplicates: true, watched: [], hide_words: [], hide_companies: [], saved_views: [], weekly_goal: 5,
@@ -88,6 +88,9 @@ export function installMock() {
         return false;
       case "site_memory":
         return { "acme.onboard.org": { runs: 3, sent: 1, handed_over: 2, has_captcha: true } };
+      case "ai_one_shot":
+        await new Promise((r) => setTimeout(r, 400));
+        return '{"roles":["Cashier"],"fields":["retail","production"],"avoid_fields":["sales"],"terms":["Supermarkt","Kassier"],"level":""}';
       case "mcp_config":
         return "{}";
       case "ai_chat":

@@ -63,7 +63,7 @@ export function AutopilotView({
 
   async function addTop() {
     const best = jobs
-      .filter((j) => (fits[j.id]?.score ?? 0) >= QUEUE_MIN_FIT && (!tracks[j.id] || (tracks[j.id].status === "saved" && !tracks[j.id].queued && !tracks[j.id].needs_you)))
+      .filter((j) => fits[j.id]?.relevant && (fits[j.id]?.score ?? 0) >= QUEUE_MIN_FIT && (!tracks[j.id] || (tracks[j.id].status === "saved" && !tracks[j.id].queued && !tracks[j.id].needs_you)))
       .sort((a, b) => (fits[b.id]?.score ?? 0) - (fits[a.id]?.score ?? 0))
       .slice(0, QUEUE_BATCH);
     for (const j of best) await onUpdate(j, { queued: true });

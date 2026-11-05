@@ -100,6 +100,8 @@ export interface Person {
   roles: string[];
   /** Ids from lib/fields.ts. */
   fields: string[];
+  /** Fields never to show. */
+  avoid_fields: string[];
   job_types: string[];
   languages: LanguageLevel[];
   /** Longest acceptable trip in minutes (0 = don't mind). */
@@ -125,7 +127,6 @@ export interface SavedAnswer {
 }
 
 export interface Settings {
-  everyday_jobs: boolean;
   do_not_disturb: boolean;
   morning_queue: boolean;
   morning_count: number;

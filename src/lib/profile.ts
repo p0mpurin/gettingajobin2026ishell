@@ -1,6 +1,6 @@
 /** Turns setup answers into what the rest of the app uses, and reads them back out of a CV. */
 import type { LanguageLevel, Person } from "../types";
-import { fieldById } from "./fields.ts";
+import { fieldById, wantedFields } from "./fields.ts";
 import { detectSkills } from "./match.ts";
 
 export const EMPTY_PERSON: Person = {
@@ -11,6 +11,7 @@ export const EMPTY_PERSON: Person = {
   level: "",
   roles: [],
   fields: [],
+  avoid_fields: [],
   job_types: [],
   languages: [],
   max_commute: 0,
@@ -51,8 +52,39 @@ export function searchTerms(p: Person): string[] {
     if (v && !out.some((o) => o.toLowerCase() === v.toLowerCase())) out.push(v);
   };
   p.roles.forEach(add);
-  p.fields.forEach((f) => fieldById(f)?.terms.forEach(add));
+  wantedFields(p).forEach((f) => f.terms.forEach(add));
   return out.slice(0, MAX_TERMS);
+}
+
+const same = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+
+/**
+ * Keeps search terms and preferences saying the same thing when either is edited:
+ * picking a field adds its terms and dropping it removes them, and removing the
+ * last of a field's terms drops the field. Never adds back a term the user removed.
+ */
+export function reconcile<T extends { terms: string[]; person: Person; profile: string }>(prev: T, next: T): T {
+  let terms = next.terms;
+  const fields = next.person.fields;
+  const added = fields.filter((f) => !prev.person.fields.includes(f));
+  const dropped = prev.person.fields.filter((f) => !fields.includes(f));
+  for (const id of dropped) {
+    const own = fieldById(id)?.terms ?? [];
+    terms = terms.filter((t) => !own.some((o) => same(o, t)));
+  }
+  for (const id of added) {
+    for (const t of fieldById(id)?.terms ?? []) if (!terms.some((x) => same(x, t))) terms = [...terms, t];
+  }
+  const removedTerms = prev.terms.filter((t) => !next.terms.some((x) => same(x, t)));
+  const kept = fields.filter((id) => {
+    const own = fieldById(id)?.terms ?? [];
+    const lostOne = own.some((o) => removedTerms.some((t) => same(o, t)));
+    return !lostOne || own.some((o) => terms.some((t) => same(o, t)));
+  });
+  const person = { ...next.person, fields: kept };
+  const wanted = [...person.roles, ...kept.map((f) => fieldById(f)?.label ?? f)].join(", ");
+  const profile = /^Looking for:.*$/m.test(next.profile) ? next.profile.replace(/^Looking for:.*$/m, wanted ? `Looking for: ${wanted}` : "").replace(/\n{3,}/g, "\n\n") : next.profile;
+  return { ...next, terms, person, profile };
 }
 
 /* ---------- reading a CV ---------- */

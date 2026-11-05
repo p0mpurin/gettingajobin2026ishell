@@ -15,7 +15,7 @@ Built with Tauri v2, Rust and React, with an OLED-black, chrome-accented UI.
   - *MCP connector:* `bolzano-jobs --mcp` lets local AI tools (Claude Desktop, Cursor…) use the app; copy the details from Settings. ChatGPT can't reach apps on your computer without a public tunnel.
 - **Prepare application:** one review screen for any draft, to send yourself from your email or the employer's site.
 - **Easy Apply:** one button on any job. A live webview opens inside the app and your connected AI fills in the form, attaches the right CV and, if your settings allow, accepts required privacy notices and presses submit. Those limits are enforced in code. Captchas, logins and questions it can't answer from your profile hand over to you in the same window.
-- **Everyday jobs:** reception, help desk, office and sales are searched and kept in the feed, one in every few places, with their own filter.
+- **Any kind of work:** fields for supermarkets and shops, cleaning, warehouses, farm work, reception and more, plus "never show". For You only recommends real matches for what you asked for, and your search terms are used exactly as you set them.
 - **Do Not Disturb:** AI work pauses and nothing new opens while a game or anything else runs full screen.
 - **Morning queue:** the first time the app is open after 5am, your best new matches are lined up for one-tap approval.
 - **Site memory:** Easy Apply remembers how each site went and uses that as a hint next time.

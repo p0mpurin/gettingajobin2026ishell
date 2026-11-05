@@ -68,6 +68,7 @@ export const api = {
   mailResolve: (id: string, accept: boolean) => invoke<void>("mail_resolve", { id, accept }),
   gameRunning: () => invoke<boolean>("game_running"),
   siteMemory: () => invoke<Record<string, { runs: number; sent: number; handed_over: number; has_captcha: boolean }>>("site_memory"),
+  aiOneShot: (system: string, prompt: string) => invoke<string>("ai_one_shot", { system, prompt }),
   mcpConfig: () => invoke<string>("mcp_config"),
   mirrorNow: () => invoke<string>("mirror_now"),
   openDataFolder: () => invoke<void>("open_data_folder"),

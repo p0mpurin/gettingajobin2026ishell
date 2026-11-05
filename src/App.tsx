@@ -12,7 +12,8 @@ import { isFollowUpDue, snoozeUntil } from "./lib/followup";
 import { formatWhen } from "./lib/ics";
 import { hiddenBy } from "./lib/rules";
 import { weeklyStats } from "./lib/weekly";
-import { isEveryday, learnSignals, mixFeed, scoreJob, type Fit } from "./lib/foryou";
+import { avoidedField, isEveryday, learnSignals, scoreJob, type Fit } from "./lib/foryou";
+import { fieldsIn } from "./lib/fields";
 import { setLanguage } from "./lib/i18n";
 import type { SavedView } from "./types";
 import { TitleBar } from "./components/TitleBar";
@@ -244,7 +245,7 @@ function Shell() {
   useEffect(() => {
     if (!jobs.length) return;
     // The closest title matches are read first, so For You sharpens where it counts.
-    const closeness = (j: Job) => fitsRef.current[j.id]?.score ?? 0;
+    const closeness = (j: Job) => (fitsRef.current[j.id]?.relevant ? fitsRef.current[j.id].score : 0);
     const wanted = (j: Job) => german === "ok" || j.junior || j.is_new || tracks[j.id] || closeness(j) >= FOR_YOU_MIN;
     const queue = jobs
       .filter((j) => canLoadDescription(j) && descriptions[j.id] === undefined && wanted(j))
@@ -338,7 +339,7 @@ function Shell() {
     const out: Record<string, Fit> = {};
     if (!settings) return out;
     for (const j of allJobs) {
-      out[j.id] = scoreJob(j, { person: settings.person, skills: settings.skills, analysis: analyses[j.id], commute: commutes[j.location], signals, aiRank: aiRanks[j.id], everyday: settings.everyday_jobs });
+      out[j.id] = scoreJob(j, { person: settings.person, skills: settings.skills, analysis: analyses[j.id], commute: commutes[j.location], signals, aiRank: aiRanks[j.id], terms: settings.terms, tracked: !!tracks[j.id] });
     }
     return out;
   }, [allJobs, settings, analyses, commutes, signals, aiRanks]);
@@ -348,7 +349,7 @@ function Shell() {
   const matchesFilter = useCallback(
     (j: Job, f: Filter) => {
       const st = tracks[j.id]?.status;
-      if (f === "foryou") return !j.delisted && (!st || st === "saved") && (fitsRef.current[j.id]?.score ?? 0) >= FOR_YOU_MIN;
+      if (f === "foryou") return !j.delisted && (!st || st === "saved") && !!fitsRef.current[j.id]?.relevant && (fitsRef.current[j.id]?.score ?? 0) >= FOR_YOU_MIN;
       if (f === "everyday") return !j.delisted && isEveryday(j.title);
       if (f === "new") return j.is_new;
       if (f === "junior") return j.junior;
@@ -392,10 +393,15 @@ function Shell() {
     const out = new Set<string>();
     const words = settings?.hide_words ?? [];
     const companies = settings?.hide_companies ?? [];
-    if (!words.length && !companies.length) return out;
-    for (const j of allJobs) if (!tracks[j.id] && hiddenBy(j.title, j.company, words, companies)) out.add(j.id);
+    const person = settings?.person;
+    const never = !!person?.avoid_fields?.length;
+    if (!words.length && !companies.length && !never) return out;
+    for (const j of allJobs) {
+      if (tracks[j.id]) continue;
+      if (hiddenBy(j.title, j.company, words, companies) || (never && person && avoidedField(j.title, person))) out.add(j.id);
+    }
     return out;
-  }, [allJobs, tracks, settings?.hide_words, settings?.hide_companies]);
+  }, [allJobs, tracks, settings?.hide_words, settings?.hide_companies, settings?.person]);
 
   const base = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -506,8 +512,7 @@ function Shell() {
     const list = base.filter((j) => matchesFilter(j, filter) && (hiddenOk || tracks[j.id]?.status !== "hidden"));
     if (filter === "foryou") {
       const s = (j: Job) => sortScores[j.id] ?? fits[j.id]?.score ?? 0;
-      const ranked = list.sort((a, b) => s(b) - s(a));
-      return (settings?.everyday_jobs ? mixFeed(ranked, (j) => isEveryday(j.title)) : ranked).slice(0, FOR_YOU_MAX);
+      return list.sort((a, b) => s(b) - s(a)).slice(0, FOR_YOU_MAX);
     }
     const score = (j: Job) => sortScores[j.id] ?? (j.junior ? 40 : -1);
     const date = (j: Job) => j.published ?? new Date(j.first_seen * 1000).toISOString();
@@ -519,7 +524,7 @@ function Shell() {
           : score(b) - score(a) || date(b).localeCompare(date(a)),
     );
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [base, filter, sort, matchesFilter, sortScores, tracks, settings?.everyday_jobs]);
+  }, [base, filter, sort, matchesFilter, sortScores, tracks]);
 
   const counts = useMemo(() => {
     const c = {} as Record<Filter, number>;
@@ -622,6 +627,15 @@ function Shell() {
     const prev = tracksRef.current[job.id];
     const saved = await api.setTrack(job.id, { ...snapshot(job, prev), status: "hidden", hide_reason: reason });
     if (saved) setTracks((t) => ({ ...t, [job.id]: saved }));
+    // Wrong field is worth asking about once: it's the fastest way to clean up the feed.
+    const field = reason === "field" && settings ? fieldsIn(job.title).find((f) => !settings.person.fields.includes(f.id) && !settings.person.avoid_fields?.includes(f.id)) : undefined;
+    if (field && settings) {
+      toast(`Hidden. Never show ${field.label}?`, "info", {
+        label: "Never show",
+        run: () => saveSettings({ ...settings, person: { ...settings.person, avoid_fields: [...(settings.person.avoid_fields ?? []), field.id] } }),
+      });
+      return;
+    }
     toast("Got it, fewer like this", "ok", {
       label: "Undo",
       run: async () => {
@@ -720,8 +734,8 @@ function Shell() {
 
   async function saveSettings(s: Settings) {
     await api.saveSettings(s);
-    const searchChanged = JSON.stringify([s.terms, s.districts, s.include_noi, s.include_suedtiroler, s.onboard_companies, s.onboard_local_only, s.everyday_jobs]) !==
-      JSON.stringify([settings?.terms, settings?.districts, settings?.include_noi, settings?.include_suedtiroler, settings?.onboard_companies, settings?.onboard_local_only, settings?.everyday_jobs]);
+    const searchChanged = JSON.stringify([s.terms, s.districts, s.include_noi, s.include_suedtiroler, s.onboard_companies, s.onboard_local_only]) !==
+      JSON.stringify([settings?.terms, settings?.districts, settings?.include_noi, settings?.include_suedtiroler, settings?.onboard_companies, settings?.onboard_local_only]);
     setSettings(s);
     if (searchChanged) refresh();
   }
@@ -761,7 +775,7 @@ function Shell() {
       return;
     }
     const picks = jobs
-      .filter((j) => !tracksRef.current[j.id] && (fitsRef.current[j.id]?.score ?? 0) >= MORNING_MIN_FIT)
+      .filter((j) => !tracksRef.current[j.id] && fitsRef.current[j.id]?.relevant && (fitsRef.current[j.id]?.score ?? 0) >= MORNING_MIN_FIT)
       .sort((a, b) => Number(b.is_new) - Number(a.is_new) || (fitsRef.current[b.id]?.score ?? 0) - (fitsRef.current[a.id]?.score ?? 0))
       .slice(0, settings.morning_count);
     // Scores improve as postings are read: keep looking until something qualifies.

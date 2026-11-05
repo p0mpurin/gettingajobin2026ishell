@@ -10,6 +10,8 @@ export interface Field {
   terms: string[];
   /** Recognises the field in a job title or posting. */
   pattern: RegExp;
+  /** Titles the pattern would catch that aren't this field. */
+  not?: RegExp;
   /** Offered as tap-to-add suggestions in setup. */
   skills: string[];
 }
@@ -19,21 +21,23 @@ export const FIELDS: Field[] = [
     id: "it",
     label: "IT & software",
     terms: ["Software", "Entwickler", "Sviluppatore", "Informatik"],
-    pattern: /software|developer|entwickl|sviluppator|programm|informati|\bit[- ](?:support|admin|techni|speziali|specialist)|system(?:admin|techni)|devops|data engineer|web/i,
+    pattern: /software|developer|entwickler|sviluppator|programmier|informati|\bit[- ](?:support|admin|techni|speziali|specialist)|system(?:admin|techni)|devops|data engineer|\bweb.?(?:develop|entwick|design|master)|front.?end|back.?end|full.?stack/i,
+    not: /vertrieb|\bsales\b|verkäufer|außendienst/i,
     skills: ["JavaScript", "TypeScript", "Python", "Java", "C#", "SQL", "React", "Git", "Linux", "Windows", "IT Support", "Networking"],
   },
   {
     id: "frontdesk",
     label: "Reception & customer service",
     terms: ["Rezeption", "Receptionist", "Kundenservice", "Helpdesk"],
-    pattern: /rezeption|receptionist|ricevimento|empfang|portier|concierge|front.?(?:office|desk)|help.?desk|service.?desk|kundenservice|kundendienst|kundenberat|customer.?(?:service|support|care)|call.?center|assistenza clienti/i,
+    pattern: /rezeption|receptionist|ricevimento|empfang|portier|concierge|front.?(?:office|desk)|help.?desk|service.?desk|kundenservice|kundendienst|customer.?(?:service|support|care)|call.?cent|assistenza clienti/i,
+    not: /techniker|monteur|montage|reparatur|installation/i,
     skills: ["Customer service", "Phone support", "Reception", "Microsoft Office", "Booking systems", "Ticketing"],
   },
   {
     id: "hospitality",
     label: "Hotels & restaurants",
     terms: ["Hotel", "Koch", "Kellner", "Rezeption"],
-    pattern: /hotel|\bkoch\b|köchin|küche|kellner|service(?:mitarbeiter|kraft)|rezeption|cuoc[oa]|camerier|receptionist|ricevimento|barista|housekeeping|zimmermädchen|gastronom/i,
+    pattern: /hotel|\bkoch\b|köchin|küche|kellner|service(?:mitarbeiter|kraft)|cuoc[oa]|camerier|barista|gastronom|restaurant|kitchen|\bcook\b|waiter|waitress|lavapiatti|tellerwäscher|pizzaiol|barman|barkeeper/i,
     skills: ["Guest service", "Cooking", "Reception", "Serving", "Housekeeping", "Bar", "HACCP"],
   },
   {
@@ -58,11 +62,33 @@ export const FIELDS: Field[] = [
     skills: ["Accounting", "Excel", "SAP", "Controlling", "Payroll", "Tax"],
   },
   {
+    id: "retail",
+    label: "Supermarket & shops",
+    terms: ["Supermarkt", "Verkäufer", "Commesso", "Kassier"],
+    pattern: /supermarket|supermarkt|supermercato|verkäufer|verkaufsmitarbeit|verkaufskraft|verkaufshilfe|mitarbeiter.{0,8}verkauf|\bverkauf\b|kassier|cassier|cashier|commess|filial|regal|scaffal|lebensmittel|einzelhandel|detailhandel|discount|negozio|\bshop\b|retail|addett[oa].{0,8}vendit|metzger|macell|bäcker|panett|feinkost|salumi/i,
+    not: /außendienst|aussendienst|maschinenbau|baumaschin|\bsales\b|vertrieb|kundenberat|\bbank\b|versicher/i,
+    skills: ["Customer service", "Cash handling", "Stocking shelves", "Food handling", "Working in a team"],
+  },
+  {
     id: "sales",
-    label: "Sales & retail",
-    terms: ["Verkauf", "Vendita", "Commesso", "Sales"],
-    pattern: /verkauf|vendit|commess|\bsales\b|kundenberat|filial|einzelhandel|retail|negozio|kassier|cassier/i,
-    skills: ["Sales", "Customer service", "Negotiation", "Cash handling", "CRM"],
+    label: "Sales & account management",
+    terms: ["Vertrieb", "Sales", "Außendienst", "Commerciale"],
+    pattern: /vertrieb|außendienst|aussendienst|\bsales\b|key.?account|account.?manag|business.?develop|handelsvertret|\bagente\b|venditor|commerciale|verkaufsleit|verkaufsinnen|verkaufsau|verkaufsberat|kundenberat|(?:verkauf|verkäufer).*(?:maschinenbau|baumaschin)/i,
+    skills: ["Sales", "Negotiation", "CRM", "Key accounts"],
+  },
+  {
+    id: "cleaning",
+    label: "Cleaning & caretaking",
+    terms: ["Reinigung", "Pulizie", "Housekeeping", "Hausmeister"],
+    pattern: /reinig|pulizi|housekeeping|zimmermädchen|zimmerfrau|cameriere ai piani|facility|hausmeister|custode|cleaner|cleaning|janitor/i,
+    skills: ["Cleaning", "Housekeeping", "Reliable", "Working alone"],
+  },
+  {
+    id: "outdoor",
+    label: "Farm & outdoor work",
+    terms: ["Landwirtschaft", "Agricoltura", "Erntehelfer", "Gärtner"],
+    pattern: /landwirt|agricol|ernte|obstbau|frutticol|weinbau|vigna|gärtner|giardinier|forst|förster|\bfarm\b|gardener|alm\b/i,
+    skills: ["Physical work", "Machine operation", "Working outdoors", "Driving licence B"],
   },
   {
     id: "marketing",
@@ -89,7 +115,8 @@ export const FIELDS: Field[] = [
     id: "production",
     label: "Production & warehouse",
     terms: ["Produktion", "Lager", "Magazziniere", "Fahrer"],
-    pattern: /produktion|produzion|\blager|magazzin|logisti|operai|fahrer|autista|staplerfahrer|montage|montator|maschinenführer|lkw/i,
+    pattern: /produktion|produzion|\blager|magazzin|magazineur|logisti|operai|fahrer|autista|staplerfahrer|montator|maschinenführer|\blkw\b|hilfsarbeit|hilfskraft|warehouse|\bdriver\b|forklift|factory|versand|spedizion/i,
+    not: /kundendienst/i,
     skills: ["Forklift", "Driving licence C", "Machine operation", "Quality control", "Shipping"],
   },
   {
@@ -102,3 +129,15 @@ export const FIELDS: Field[] = [
 ];
 
 export const fieldById = (id: string) => FIELDS.find((f) => f.id === id);
+
+/** Whether a job title belongs to this field. */
+export const inField = (f: Field, text: string) => f.pattern.test(text) && !f.not?.test(text);
+
+export const fieldsIn = (text: string) => FIELDS.filter((f) => inField(f, text));
+
+/** What someone wants: fields they picked, plus any their job titles belong to ("cashier"). */
+export function wantedFields(person: { fields: string[]; roles: string[] }): Field[] {
+  const out = person.fields.map(fieldById).filter((f): f is Field => !!f);
+  for (const role of person.roles) for (const f of fieldsIn(role)) if (!out.includes(f)) out.push(f);
+  return out;
+}

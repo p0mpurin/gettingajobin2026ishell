@@ -4,8 +4,10 @@ import assert from "node:assert/strict";
 import { companyKey, mergeDuplicates, titleKey } from "./dedupe.ts";
 import { followUpDue, isFollowUpDue } from "./followup.ts";
 import { analyze, germanNeed, germanOk } from "./match.ts";
-import { buildProfileText, EMPTY_PERSON, levelRank, parseCv, searchTerms } from "./profile.ts";
-import { isEveryday, learnSignals, mixFeed, scoreJob } from "./foryou.ts";
+import { buildProfileText, EMPTY_PERSON, levelRank, parseCv, reconcile, searchTerms } from "./profile.ts";
+import { avoidedField, isEveryday, learnSignals, scoreJob } from "./foryou.ts";
+import { fieldById, fieldsIn, inField, wantedFields } from "./fields.ts";
+import { buildPrefsPrompt, parsePrefs } from "./prefs.ts";
 import { townOf, project, OUTLINE, TOWNS } from "./towns.ts";
 import { percent, replyStats } from "./analytics.ts";
 import { missingKeys, setLanguage, t } from "./i18n.ts";
@@ -317,24 +319,110 @@ test("everyday jobs are recognised in three languages", () => {
   assert.ok(!isEveryday("Maschinenbau Ingenieur"));
 });
 
-test("everyday jobs reach For You without a matching profile, but not senior posts", () => {
-  const ctx = { person: person({ roles: ["Developer"], level: "junior" }), skills: [], signals: noSignals, everyday: true };
-  const desk = scoreJob(job({ title: "Help Desk Mitarbeiter" }), ctx);
-  assert.ok(desk.score >= 30, "enough to enter the feed");
-  assert.ok(desk.reasons.some((r) => /Everyday/.test(r)));
-  assert.ok(!scoreJob(job({ title: "Help Desk Teamleiter" }), ctx).reasons.some((r) => /Everyday/.test(r)));
-  assert.ok(scoreJob(job({ title: "Help Desk Mitarbeiter" }), { ...ctx, everyday: false }).score < desk.score, "the setting turns it off");
+const titled = (title: string) => job({ title });
+const fitFor = (p: object, title: string, terms?: string[]) => scoreJob(titled(title), { person: person(p), skills: [], signals: noSignals, terms });
+
+test("being new or open to beginners never makes a job a match", () => {
+  const p = { roles: ["Supermarket"], level: "junior" };
+  for (const title of ["Sales Manager (m/w/d) - Tirol", "Monteur (m/w/d) für Baumaschinen", "Call Specialist*"]) {
+    const j = { ...titled(title), junior: true, is_new: true, published: new Date().toISOString() };
+    assert.equal(scoreJob(j, { person: person(p), skills: [], signals: noSignals, terms: ["Supermarket"] }).relevant, false, title);
+  }
+  assert.equal(fitFor(p, "Verkäufer (m/w/d) Supermarkt").relevant, true);
 });
 
-test("the feed keeps a place for everyday jobs", () => {
-  const dev = (n: number) => "dev" + n;
-  const sorted = [dev(1), dev(2), dev(3), dev(4), dev(5), dev(6), dev(7), "desk1", "desk2"];
-  const mixed = mixFeed(sorted, (x) => x.startsWith("desk"));
-  assert.equal(mixed.indexOf("desk1"), 3, "every 4th spot");
-  assert.equal(mixed.indexOf("desk2"), 7);
-  assert.equal(mixed.length, sorted.length, "nothing lost");
-  assert.deepEqual(mixFeed(["a", "b"], () => false), ["a", "b"]);
-  assert.equal(mixFeed(["desk", "dev"], (x) => x === "desk")[0], "desk", "already high stays high");
+test("shop work and sales are different fields", () => {
+  const retail = fieldById("retail")!;
+  const sales = fieldById("sales")!;
+  for (const t of ["Verkäufer (m/w/d)", "Verkäuferin Teilzeit", "Kassiererin", "Mitarbeiter im Verkauf", "Addetto alle vendite", "Commessa", "Supermarkt Mitarbeiter", "Bäcker"]) {
+    assert.ok(inField(retail, t), t);
+    assert.ok(!inField(sales, t), t);
+  }
+  for (const t of ["Sales Manager (m/w/d)", "Vertriebsmitarbeiter im Außendienst", "Key Account Manager", "Verkäufer:in im Außendienst", "Mitarbeiter im Verkauf für Maschinenbau", "Junior Kundenberater Filiale"]) {
+    assert.ok(inField(sales, t), t);
+    assert.ok(!inField(retail, t), t);
+  }
+});
+
+test("never show hides a field, but what they asked for wins", () => {
+  const p = person({ fields: ["retail"], avoid_fields: ["sales"] });
+  assert.match(avoidedField("Sales Manager", p) ?? "", /Sales/);
+  assert.equal(avoidedField("Verkäufer (m/w/d)", p), undefined);
+  assert.equal(avoidedField("Koch", p), undefined);
+  assert.equal(avoidedField("Sales Manager", person({ roles: ["Sales Manager"], avoid_fields: ["sales"] })), undefined);
+  const fit = fitFor({ fields: ["retail"], avoid_fields: ["sales"] }, "Sales Manager");
+  assert.equal(fit.relevant, false);
+  assert.ok(fit.avoided);
+});
+
+test("loose word matches don't drag other work in", () => {
+  const dev = { roles: ["Software Developer"], fields: ["it"] };
+  assert.equal(fitFor(dev, "Sales Manager Software Tools").relevant, false);
+  assert.equal(fitFor(dev, "Mitarbeiter Lagerlogistik mit Entwicklungsperspektive").relevant, false);
+  assert.equal(fitFor(dev, "Verkäufer:in im Außendienst für Webseiten").relevant, false);
+  assert.equal(fitFor(dev, "Softwareentwickler (m/w/d)").relevant, true);
+  assert.equal(fitFor({ roles: ["Customer Service"] }, "Servicetechniker").relevant, false, "vague words alone");
+  assert.equal(fitFor({ roles: ["normal work"] }, "Enterprise Europa Network").relevant, false, "not inside another word");
+  assert.equal(fitFor({ roles: ["Lager"] }, "Leiter Ersatzteillager").relevant, false, "only at the start of a word");
+  assert.equal(fitFor({ roles: ["Lager"] }, "Lagermitarbeiter").relevant, true);
+  assert.equal(fitFor({ fields: ["frontdesk"] }, "Kundendiensttechniker").relevant, false);
+  assert.equal(fitFor({ fields: ["frontdesk"] }, "Receptionist (m/w/d)").relevant, true);
+});
+
+test("search terms count as whole words and titles lead to fields", () => {
+  assert.equal(fitFor({}, "IT Administrator", ["IT"]).relevant, true);
+  assert.equal(fitFor({}, "Mitarbeiter Marketing", ["IT"]).relevant, false, "IT isn't inside other words");
+  assert.equal(fitFor({}, "Softwareentwickler", ["Software"]).relevant, true);
+  assert.deepEqual(wantedFields(person({ roles: ["Cashier"] })).map((f) => f.id), ["retail"]);
+  assert.ok(searchTerms(person({ roles: ["Cashier"] })).includes("Supermarkt"), "typed in English, searched in German");
+  assert.deepEqual(fieldsIn("Reinigungskraft").map((f) => f.id), ["cleaning"]);
+});
+
+test("learning from saves needs other jobs, not the job itself", () => {
+  const signals = learnSignals({ a: tracked({ status: "applied", title: "Marketing Teamleiter", company: "X" }), b: tracked({ status: "applied", title: "Marketing Assistenz", company: "Y" }) });
+  const ctx = { person: person({ roles: ["Koch"] }), skills: [], signals };
+  assert.equal(scoreJob(titled("Marketing Manager"), ctx).relevant, true, "similar to what they applied to");
+  assert.equal(scoreJob(titled("Marketing Teamleiter"), { ...ctx, tracked: true }).relevant, false);
+});
+
+test("someone with no preferences still gets a feed", () => {
+  assert.equal(scoreJob(titled("Koch"), { person: person(), skills: [], signals: noSignals, terms: [] }).relevant, true);
+});
+
+test("an AI's verdict settles whether it's a match", () => {
+  const base = { person: person({ roles: ["Koch"] }), skills: [], signals: noSignals };
+  assert.equal(scoreJob(titled("Lagerist"), { ...base, aiRank: { score: 80, reason: "Fits", at: 0 } }).relevant, true);
+  assert.equal(scoreJob(titled("Koch"), { ...base, aiRank: { score: 10, reason: "No", at: 0 } }).relevant, false);
+});
+
+const settingsOf = (terms: string[], p: object) => ({ terms, person: person(p), profile: "Name: A\nLooking for: x\nSkills: y" });
+
+test("removing a field's search terms drops the field: the reported bug", () => {
+  const sales = fieldById("sales")!.terms;
+  const prev = settingsOf(["Supermarkt", ...sales], { fields: ["retail", "sales"] });
+  const onlyOne = reconcile(prev, { ...prev, terms: prev.terms.filter((t) => t !== "Vertrieb") });
+  assert.ok(onlyOne.person.fields.includes("sales"), "other terms remain, so it stays");
+  const next = reconcile(prev, { ...prev, terms: ["Supermarkt"] });
+  assert.deepEqual(next.terms, ["Supermarkt"], "removed terms stay removed");
+  assert.deepEqual(next.person.fields, ["retail"]);
+  assert.match(next.profile, /Looking for: Supermarket & shops/);
+});
+
+test("picking and dropping fields updates search terms", () => {
+  const prev = settingsOf(["Koch"], { fields: [] });
+  const on = reconcile(prev, { ...prev, person: person({ fields: ["cleaning"] }) });
+  assert.ok(on.terms.includes("Reinigung") && on.terms.includes("Koch"));
+  const off = reconcile(on, { ...on, person: person({ fields: [] }) });
+  assert.deepEqual(off.terms, ["Koch"]);
+  assert.equal(reconcile(prev, prev).terms.length, 1, "no change, no effect");
+});
+
+test("preferences in your own words are checked before use", () => {
+  assert.match(buildPrefsPrompt("no sales"), /WHAT THEY SAID\nno sales/);
+  const p = parsePrefs('Sure:```{"roles":["Cashier",3],"fields":["retail","made-up"],"avoid_fields":["sales","retail"],"terms":["Supermarkt"],"level":"boss"}```');
+  assert.deepEqual(p, { roles: ["Cashier"], fields: ["retail"], avoid_fields: ["sales"], terms: ["Supermarkt"], level: "" });
+  assert.throws(() => parsePrefs("nothing"), /didn't send/);
+  assert.throws(() => parsePrefs("{oops}"), /unreadable/);
 });
 
 test("the map finds towns in both languages, on whole words", () => {
